@@ -71,12 +71,13 @@ async function loadHistory() {
 }
 
 function connect() {
-  ws = new WebSocket(`ws://${location.host}/ws?token=${encodeURIComponent(TOKEN)}`);
-  ws.onopen = () => { connEl.textContent = "connected"; loadHistory(); };
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => ws.send(JSON.stringify({ type: "auth", token: TOKEN }));
   ws.onclose = () => { connEl.textContent = "disconnected, retrying…"; setTimeout(connect, 1500); };
   ws.onmessage = (e) => {
     const ev = JSON.parse(e.data);
-    if (ev.type === "start") { add("user", ev.text, ev.source); current = add("assistant", ""); }
+    if (ev.type === "ready") { connEl.textContent = "connected"; loadHistory(); }
+    else if (ev.type === "start") { add("user", ev.text, ev.source); current = add("assistant", ""); }
     else if (ev.type === "delta" && current) { current.textContent += ev.text; log.scrollTop = log.scrollHeight; }
     else if (["done", "interrupted", "error"].includes(ev.type) && "total_ms" in ev) {
       if (current) {

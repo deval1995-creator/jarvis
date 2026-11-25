@@ -151,10 +151,22 @@ def create_app(
         if origin is not None and origin not in allowed_origins:
             await ws.close(code=4403)
             return
-        if not secrets.compare_digest(ws.query_params.get("token", ""), token):
+        await ws.accept()
+        # The token comes in the first message, not the URL, so it never lands
+        # in access logs.
+        try:
+            hello = await asyncio.wait_for(ws.receive_json(), timeout=5)
+        except (asyncio.TimeoutError, WebSocketDisconnect, ValueError):
             await ws.close(code=4401)
             return
-        await ws.accept()
+        if not (
+            isinstance(hello, dict)
+            and hello.get("type") == "auth"
+            and secrets.compare_digest(str(hello.get("token", "")), token)
+        ):
+            await ws.close(code=4401)
+            return
+        await ws.send_json({"type": "ready", "conversation_id": manager.conversation_id})
         hub.sockets.add(ws)
         try:
             while True:

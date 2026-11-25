@@ -53,7 +53,9 @@ def test_post_message_rejects_bad_source(client):
 
 
 def test_websocket_streams_a_turn(client):
-    with client.websocket_connect(f"{WS}?token={TOKEN}", headers=ORIGIN) as ws:
+    with client.websocket_connect(WS, headers=ORIGIN) as ws:
+        ws.send_json({"type": "auth", "token": TOKEN})
+        assert ws.receive_json()["type"] == "ready"
         ws.send_json({"type": "message", "text": "hi"})
         types = []
         while True:
@@ -64,17 +66,24 @@ def test_websocket_streams_a_turn(client):
     assert types == ["start", "delta", "delta", "done"]
 
 
-def test_websocket_rejects_bad_token_and_foreign_origin(client):
+def test_websocket_rejects_bad_token(client):
     from starlette.websockets import WebSocketDisconnect
 
-    for url, headers, code in [
-        (f"{WS}?token=wrong", ORIGIN, 4401),
-        (f"{WS}?token={TOKEN}", {"origin": "https://evil.example"}, 4403),
-    ]:
-        with pytest.raises(WebSocketDisconnect) as e:
-            with client.websocket_connect(url, headers=headers):
-                pass
-        assert e.value.code == code
+    for hello in [{"type": "auth", "token": "wrong"}, {"type": "message", "text": "hi"}]:
+        with client.websocket_connect(WS, headers=ORIGIN) as ws:
+            ws.send_json(hello)
+            with pytest.raises(WebSocketDisconnect) as e:
+                ws.receive_json()
+            assert e.value.code == 4401
+
+
+def test_websocket_rejects_foreign_origin(client):
+    from starlette.websockets import WebSocketDisconnect
+
+    with pytest.raises(WebSocketDisconnect) as e:
+        with client.websocket_connect(WS, headers={"origin": "https://evil.example"}):
+            pass
+    assert e.value.code == 4403
 
 
 def test_new_conversation(client):

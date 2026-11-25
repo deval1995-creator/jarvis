@@ -40,6 +40,7 @@ class SessionManager:
         self.backend = backend_factory(claude_session_id)
         self._lock = asyncio.Lock()
         self._current: _Turn | None = None
+        self.current_source: str | None = None  # for tools that need to know where a turn came from
         self.last_turn: dict | None = None
 
     @property
@@ -78,6 +79,7 @@ class SessionManager:
 
     async def _run_turn(self, turn: _Turn, text: str, source: str) -> AsyncIterator[dict]:
         conversation_id = self.conversation_id
+        self.current_source = source
         store.add_message(self.conn, conversation_id, "user", source, text)
         yield {"type": "start", "conversation_id": conversation_id, "source": source, "text": text}
 
@@ -93,6 +95,8 @@ class SessionManager:
                         first_token_ms = int((time.perf_counter() - start) * 1000)
                     parts.append(payload)
                     yield {"type": "delta", "text": payload}
+                elif kind == "tool":
+                    yield {"type": "tool", "name": payload}
                 elif kind == "result":
                     result = payload
         except Exception as exc:  # the CLI died, network dropped, limits hit...

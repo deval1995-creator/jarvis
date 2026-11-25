@@ -22,7 +22,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from core import db, store
+from core import db, memory, store
 from core.sessions import SOURCES, BackendFactory, SessionManager
 
 log = logging.getLogger(__name__)
@@ -44,6 +44,21 @@ def load_or_create_token(data_dir: Path) -> str:
 class MessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=20_000)
     source: str = "typed"
+
+
+class ApproveIn(BaseModel):
+    text: str | None = Field(default=None, max_length=5_000)  # optional edit before approving
+
+
+class MemoryEditIn(BaseModel):
+    text: str | None = Field(default=None, max_length=5_000)
+    category: str | None = None
+    importance: int | None = Field(default=None, ge=1, le=5)
+    pinned: bool | None = None
+
+
+class LocalOnlyIn(BaseModel):
+    categories: list[str]
 
 
 class Hub:
@@ -68,15 +83,28 @@ def create_app(
 ) -> FastAPI:
     if conn is None:
         conn = db.connect()
-    if backend_factory is None:
-        from core.backend import SDKBackend
-
-        backend_factory = SDKBackend
     if token is None:
         token = load_or_create_token(db.default_db_path().parent)
+    hub = Hub()
+
+    async def on_proposal(p: dict) -> None:
+        await hub.broadcast({"type": "memory_proposal", "proposal": p})
+
+    if backend_factory is None:
+        from core.backend import SDKBackend
+        from core.memory_mcp import ALLOWED_TOOLS, build_memory_server
+
+        # `manager` is bound below; the lambda reads it at call time.
+        memory_server = build_memory_server(
+            conn,
+            context=lambda: {"conversation_id": manager.conversation_id, "source": manager.current_source},
+            on_proposal=on_proposal,
+        )
+
+        def backend_factory(resume):
+            return SDKBackend(resume, mcp_servers={"memory": memory_server}, allowed_tools=ALLOWED_TOOLS)
 
     manager = SessionManager(conn, backend_factory)
-    hub = Hub()
     allowed_origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
     turn_tasks: set[asyncio.Task] = set()
 
@@ -140,6 +168,55 @@ def create_app(
         conversation_id = await manager.new_conversation()
         await hub.broadcast({"type": "new_conversation", "conversation_id": conversation_id})
         return {"conversation_id": conversation_id}
+
+    # ----- memory: Deval's side (Claude can only propose) -----
+
+    def _memory_call(fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except memory.MemoryError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+
+    @app.get("/api/memory/proposals", dependencies=[Depends(require_token)])
+    async def list_proposals(status: str = "pending") -> list[dict]:
+        return memory.list_proposals(conn, status)
+
+    @app.post("/api/memory/proposals/{proposal_id}/approve", dependencies=[Depends(require_token)])
+    async def approve_proposal(proposal_id: int, body: ApproveIn | None = None) -> dict:
+        p = _memory_call(memory.approve, conn, proposal_id, body.text if body else None)
+        await hub.broadcast({"type": "memory_decided", "proposal": p})
+        return p
+
+    @app.post("/api/memory/proposals/{proposal_id}/reject", dependencies=[Depends(require_token)])
+    async def reject_proposal(proposal_id: int) -> dict:
+        p = _memory_call(memory.reject, conn, proposal_id)
+        await hub.broadcast({"type": "memory_decided", "proposal": p})
+        return p
+
+    @app.get("/api/memory", dependencies=[Depends(require_token)])
+    async def search_memory(q: str | None = None, archived: bool = False) -> list[dict]:
+        return memory.list_memories(conn, q, include_archived=archived)
+
+    @app.patch("/api/memory/{memory_id}", dependencies=[Depends(require_token)])
+    async def edit_memory(memory_id: int, body: MemoryEditIn) -> dict:
+        fields = body.model_dump(exclude_none=True)
+        if "pinned" in fields:
+            fields["pinned"] = int(fields["pinned"])
+        return _memory_call(memory.edit_memory, conn, memory_id, **fields)
+
+    @app.delete("/api/memory/{memory_id}", dependencies=[Depends(require_token)])
+    async def delete_memory(memory_id: int) -> dict:
+        _memory_call(memory.archive_memory, conn, memory_id)
+        return {"archived": memory_id}
+
+    @app.get("/api/memory/settings/local-only", dependencies=[Depends(require_token)])
+    async def get_local_only() -> dict:
+        return {"categories": memory.local_only_categories(conn)}
+
+    @app.put("/api/memory/settings/local-only", dependencies=[Depends(require_token)])
+    async def put_local_only(body: LocalOnlyIn) -> dict:
+        memory.set_local_only_categories(conn, body.categories)
+        return {"categories": memory.local_only_categories(conn)}
 
     @app.get("/api/status", dependencies=[Depends(require_token)])
     async def get_status() -> dict:

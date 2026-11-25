@@ -6,66 +6,171 @@
 <title>Jarvis</title>
 <style>
   :root { color-scheme: light dark; --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4;
-          --me: #e0ecff; --accent: #2563eb; }
+          --me: #e0ecff; --accent: #2563eb; --panel: #f5f5f4; --warn: #b45309; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --me: #1e3a5f; --accent: #60a5fa; }
+    :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --me: #1e3a5f; --accent: #60a5fa;
+            --panel: #292524; --warn: #fbbf24; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg);
-         display: flex; flex-direction: column; height: 100vh; }
-  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+         display: grid; grid-template-columns: 1fr 340px; grid-template-rows: auto 1fr; height: 100vh; }
+  header { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+           border-bottom: 1px solid var(--line); }
   header h1 { font-size: 16px; margin: 0; }
   #conn { font-size: 12px; color: var(--muted); }
-  header button { margin-left: auto; }
+  header .spacer { flex: 1; }
+  main { display: flex; flex-direction: column; min-height: 0; }
   #log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
   .msg { max-width: 75ch; padding: 8px 12px; border-radius: 10px; white-space: pre-wrap; }
   .user { align-self: flex-end; background: var(--me); }
   .assistant { align-self: flex-start; border: 1px solid var(--line); }
   .meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .toolnote { align-self: flex-start; font-size: 12px; color: var(--muted); }
   .cut::after { content: " [interrupted]"; color: var(--muted); font-size: 12px; }
   .err { color: #dc2626; }
-  form { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
-  textarea { flex: 1; resize: none; font: inherit; padding: 8px 10px; border-radius: 8px;
+  form#chat { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
+  textarea, input[type=search], input[type=text] { font: inherit; padding: 8px 10px; border-radius: 8px;
              border: 1px solid var(--line); background: transparent; color: inherit; }
-  button { font: inherit; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--line);
+  textarea { flex: 1; resize: none; }
+  button { font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 8px; border: 1px solid var(--line);
            background: transparent; color: inherit; cursor: pointer; }
   button.primary { background: var(--accent); border-color: var(--accent); color: white; }
   #stats { font: 12px ui-monospace, monospace; color: var(--muted); padding: 0 16px 8px; }
+  aside { border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; padding: 12px 14px;
+          display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  aside h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 6px 0 0; }
+  .card { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px; font-size: 14px; }
+  .card.pending { border-color: var(--warn); }
+  .card .tag { font-size: 11px; color: var(--muted); }
+  .card .why { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .card .actions { display: flex; gap: 6px; margin-top: 8px; }
+  .card input[type=text] { width: 100%; margin-top: 6px; }
+  .empty { font-size: 13px; color: var(--muted); }
+  #inboxCount { background: var(--warn); color: var(--bg); border-radius: 999px; padding: 0 7px; font-size: 12px; }
 </style>
 </head>
 <body>
 <header>
   <h1>Jarvis</h1><span id="conn">connecting…</span>
+  <span class="spacer"></span>
   <button id="newchat" type="button">New conversation</button>
 </header>
-<div id="log"></div>
-<div id="stats"></div>
-<form id="form">
-  <textarea id="input" rows="2" placeholder="Message Jarvis (Enter to send, Shift+Enter for a new line, Esc to stop)" autofocus></textarea>
-  <button id="stop" type="button">Stop</button>
-  <button class="primary" type="submit">Send</button>
-</form>
+<main>
+  <div id="log"></div>
+  <div id="stats"></div>
+  <form id="chat">
+    <textarea id="input" rows="2" placeholder="Message Jarvis (Enter to send, Shift+Enter for a new line, Esc to stop)" autofocus></textarea>
+    <button id="stop" type="button">Stop</button>
+    <button class="primary" type="submit">Send</button>
+  </form>
+</main>
+<aside>
+  <h2>Memory inbox <span id="inboxCount" hidden></span></h2>
+  <div id="inbox"></div>
+  <h2>Saved memories</h2>
+  <input type="search" id="memq" placeholder="Search memories">
+  <div id="memories"></div>
+</aside>
 <script>
 const TOKEN = "__JARVIS_TOKEN__";
 const headers = { "X-Jarvis-Token": TOKEN, "Content-Type": "application/json" };
-const log = document.getElementById("log"), input = document.getElementById("input");
-const connEl = document.getElementById("conn"), stats = document.getElementById("stats");
+const $ = (id) => document.getElementById(id);
+const log = $("log"), input = $("input"), connEl = $("conn"), stats = $("stats");
 let ws, current = null;
 
-function add(role, text, source) {
-  const el = document.createElement("div");
-  el.className = "msg " + role;
-  el.textContent = text;
-  if (source && source !== "typed") {
-    const m = document.createElement("div"); m.className = "meta"; m.textContent = source; el.append(m);
-  }
-  log.append(el); log.scrollTop = log.scrollHeight;
-  return el;
+const api = (path, opts = {}) => fetch(path, { headers, ...opts }).then(async (r) => {
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+});
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
 }
 
+function add(role, text, source) {
+  const m = el("div", "msg " + role, text);
+  if (source && source !== "typed") m.append(el("div", "meta", source));
+  log.append(m); log.scrollTop = log.scrollHeight;
+  return m;
+}
+
+const TOOL_LABELS = { recall: "checked memory", get_profile: "loaded your profile", remember: "proposed a memory",
+                      update: "proposed a memory change", forget: "proposed forgetting a memory", log: "proposed a journal entry" };
+function toolNote(name) {
+  const short = name.replace(/^mcp__\w+?__/, "");
+  const note = el("div", "toolnote", "· " + (TOOL_LABELS[short] || "used " + short));
+  log.insertBefore(note, current); // above the reply it belongs to
+}
+
+// ---------- memory panel ----------
+function describe(p) {
+  if (p.action === "forget") return "Forget: " + p.text;
+  if (p.action === "update") return "Change to: " + p.text;
+  return p.text;
+}
+
+function proposalCard(p) {
+  const c = el("div", "card pending");
+  c.dataset.id = p.id;
+  c.append(el("div", "tag", [p.action, p.kind, p.category, p.confidence && p.confidence < 1 ? "inferred" : null]
+    .filter(Boolean).join(" · ")));
+  c.append(el("div", "", describe(p)));
+  if (p.reason) c.append(el("div", "why", p.reason));
+  const actions = el("div", "actions");
+  const yes = el("button", "primary", "Approve"), edit = el("button", "", "Edit"), no = el("button", "", "Reject");
+  let editor = null;
+  edit.onclick = () => {
+    if (editor || p.action === "forget") return;
+    editor = el("input"); editor.type = "text"; editor.value = p.text;
+    c.insertBefore(editor, actions); editor.focus();
+  };
+  yes.onclick = async () => {
+    await api(`/api/memory/proposals/${p.id}/approve`, { method: "POST",
+      body: JSON.stringify(editor ? { text: editor.value } : {}) }).catch((e) => alert(e.message));
+  };
+  no.onclick = () => api(`/api/memory/proposals/${p.id}/reject`, { method: "POST" }).catch((e) => alert(e.message));
+  actions.append(yes);
+  if (p.action !== "forget") actions.append(edit);
+  actions.append(no);
+  c.append(actions);
+  return c;
+}
+
+async function loadInbox() {
+  const items = await api("/api/memory/proposals");
+  const box = $("inbox");
+  box.replaceChildren(...(items.length ? items.map(proposalCard) : [el("div", "empty", "Nothing waiting.")]));
+  $("inboxCount").hidden = !items.length;
+  $("inboxCount").textContent = items.length;
+}
+
+async function loadMemories() {
+  const q = $("memq").value.trim();
+  const items = await api("/api/memory" + (q ? "?q=" + encodeURIComponent(q) : ""));
+  const box = $("memories");
+  box.replaceChildren(...(items.length ? items.map((m) => {
+    const c = el("div", "card");
+    c.append(el("div", "tag", [m.kind, m.category, m.pinned ? "pinned" : null, "importance " + m.importance]
+      .filter(Boolean).join(" · ")));
+    c.append(el("div", "", m.text));
+    const actions = el("div", "actions");
+    const pin = el("button", "", m.pinned ? "Unpin" : "Pin"), del = el("button", "", "Delete");
+    pin.onclick = () => api(`/api/memory/${m.id}`, { method: "PATCH", body: JSON.stringify({ pinned: !m.pinned }) }).then(loadMemories);
+    del.onclick = () => confirm("Delete this memory?") &&
+      api(`/api/memory/${m.id}`, { method: "DELETE" }).then(loadMemories);
+    actions.append(pin, del); c.append(actions);
+    return c;
+  }) : [el("div", "empty", q ? "No matches." : "No memories saved yet.")]));
+}
+let memTimer;
+$("memq").oninput = () => { clearTimeout(memTimer); memTimer = setTimeout(loadMemories, 250); };
+
+// ---------- chat ----------
 async function loadHistory() {
-  const r = await fetch("/api/conversations/current", { headers });
-  const c = await r.json();
+  const c = await api("/api/conversations/current");
   log.replaceChildren();
   for (const m of c.messages) add(m.role, m.content, m.source);
 }
@@ -76,9 +181,12 @@ function connect() {
   ws.onclose = () => { connEl.textContent = "disconnected, retrying…"; setTimeout(connect, 1500); };
   ws.onmessage = (e) => {
     const ev = JSON.parse(e.data);
-    if (ev.type === "ready") { connEl.textContent = "connected"; loadHistory(); }
+    if (ev.type === "ready") { connEl.textContent = "connected"; loadHistory(); loadInbox(); loadMemories(); }
     else if (ev.type === "start") { add("user", ev.text, ev.source); current = add("assistant", ""); }
     else if (ev.type === "delta" && current) { current.textContent += ev.text; log.scrollTop = log.scrollHeight; }
+    else if (ev.type === "tool" && current) { toolNote(ev.name); }
+    else if (ev.type === "memory_proposal") { loadInbox(); }
+    else if (ev.type === "memory_decided") { loadInbox(); loadMemories(); }
     else if (["done", "interrupted", "error"].includes(ev.type) && "total_ms" in ev) {
       if (current) {
         if (ev.type === "interrupted") current.classList.add("cut");
@@ -92,7 +200,7 @@ function connect() {
   };
 }
 
-document.getElementById("form").onsubmit = (e) => {
+$("chat").onsubmit = (e) => {
   e.preventDefault();
   const text = input.value.trim();
   if (!text || ws.readyState !== WebSocket.OPEN) return;
@@ -100,12 +208,12 @@ document.getElementById("form").onsubmit = (e) => {
   input.value = "";
 };
 input.onkeydown = (e) => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); document.getElementById("form").requestSubmit(); }
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("chat").requestSubmit(); }
 };
 const stop = () => ws.send(JSON.stringify({ type: "interrupt" }));
-document.getElementById("stop").onclick = stop;
+$("stop").onclick = stop;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") stop(); });
-document.getElementById("newchat").onclick = () => fetch("/api/conversations/new", { method: "POST", headers });
+$("newchat").onclick = () => api("/api/conversations/new", { method: "POST" });
 connect();
 </script>
 </body>

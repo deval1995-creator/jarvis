@@ -52,6 +52,67 @@ MIGRATIONS: list[str] = [
     """
     alter table usage add column cache_creation_tokens integer;
     """,
+    # v3: long-term memory. Claude never writes memories directly: every
+    # remember / update / forget is a proposal that Deval approves or rejects.
+    """
+    create table memories (
+        id          integer primary key,
+        kind        text not null check (kind in ('fact', 'preference', 'person', 'decision', 'journal')),
+        category    text,                 -- trading, study, career, projects, home, health, finances...
+        text        text not null,
+        importance  integer not null default 3 check (importance between 1 and 5),
+        confidence  real not null default 1.0,  -- below 1.0 = inferred, not stated
+        source      text,                 -- typed | voice | routine | document | manual
+        source_id   text,                 -- conversation it came from
+        pinned      integer not null default 0,
+        archived    integer not null default 0,
+        replaces_id integer references memories(id),
+        valid_from  text not null,
+        valid_to    text,                 -- set when a newer version replaces it
+        created_at  text not null,
+        updated_at  text not null
+    );
+    create index memories_active on memories(archived, category);
+    create table people (id integer primary key, name text not null unique collate nocase);
+    create table memory_people (
+        memory_id integer not null references memories(id),
+        person_id integer not null references people(id),
+        primary key (memory_id, person_id)
+    );
+    create virtual table memories_fts using fts5(text, content='memories', content_rowid='id');
+    create trigger memories_ai after insert on memories begin
+        insert into memories_fts(rowid, text) values (new.id, new.text);
+    end;
+    create trigger memories_ad after delete on memories begin
+        insert into memories_fts(memories_fts, rowid, text) values ('delete', old.id, old.text);
+    end;
+    create trigger memories_au after update of text on memories begin
+        insert into memories_fts(memories_fts, rowid, text) values ('delete', old.id, old.text);
+        insert into memories_fts(rowid, text) values (new.id, new.text);
+    end;
+    create table memory_proposals (
+        id              integer primary key,
+        action          text not null check (action in ('remember', 'update', 'forget')),
+        memory_id       integer references memories(id),  -- for update / forget
+        kind            text,
+        category        text,
+        text            text,
+        importance      integer,
+        confidence      real,
+        people          text,             -- JSON list of names
+        reason          text,             -- why Claude proposed it
+        source          text,
+        conversation_id text,
+        origin          text not null default 'chat',  -- chat | review
+        status          text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+        result_memory_id integer,
+        created_at      text not null,
+        decided_at      text
+    );
+    create index memory_proposals_status on memory_proposals(status, created_at);
+    create table settings (key text primary key, value text not null);
+    insert into settings (key, value) values ('local_only_categories', '["health", "finances"]');
+    """,
 ]
 
 
@@ -85,14 +146,27 @@ def schema_version(conn: sqlite3.Connection) -> int:
     return conn.execute("pragma user_version").fetchone()[0]
 
 
+def _split_sql(sql: str) -> list[str]:
+    """Split a migration into statements, keeping trigger bodies whole."""
+    statements, buf = [], ""
+    for part in sql.split(";"):
+        buf += part + ";"
+        if sqlite3.complete_statement(buf):
+            if buf.strip().strip(";").strip():
+                statements.append(buf.strip())
+            buf = ""
+    if buf.strip().strip(";").strip():
+        statements.append(buf.strip())
+    return statements
+
+
 def migrate(conn: sqlite3.Connection) -> None:
     current = schema_version(conn)
     for version, sql in enumerate(MIGRATIONS[current:], start=current + 1):
         conn.execute("begin")
         try:
-            for statement in sql.split(";"):
-                if statement.strip():
-                    conn.execute(statement)
+            for statement in _split_sql(sql):
+                conn.execute(statement)
             conn.execute(f"pragma user_version = {version}")
             conn.execute("commit")
         except Exception:

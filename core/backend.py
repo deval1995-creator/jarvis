@@ -20,6 +20,7 @@ from claude_agent_sdk import (
     ResultMessage,
     StreamEvent,
     TextBlock,
+    ToolUseBlock,
 )
 
 log = logging.getLogger(__name__)
@@ -36,8 +37,8 @@ class TurnResult:
     cost_usd: float | None = None
 
 
-# A turn yields ("delta", str) for each piece of reply text, then exactly one
-# ("result", TurnResult).
+# A turn yields ("delta", str) for each piece of reply text, ("tool", name) when
+# Claude calls a tool, then exactly one ("result", TurnResult).
 TurnEvent = tuple[str, "str | TurnResult"]
 
 
@@ -47,17 +48,23 @@ class Backend(Protocol):
     async def close(self) -> None: ...
 
 
-def slim_options(resume: str | None = None) -> ClaudeAgentOptions:
-    """The everyday chat session: no tools, no MCP servers, no claude.ai connectors.
+def slim_options(
+    resume: str | None = None,
+    mcp_servers: dict | None = None,
+    allowed_tools: list[str] | None = None,
+) -> ClaudeAgentOptions:
+    """The everyday chat session: no built-in tools, no claude.ai connectors, only
+    the MCP servers the Core hands it (memory, for now).
 
     Measured on this PC: ~1k context tokens per turn instead of 20-28k, and first
-    token in ~0.7 s instead of ~1.5 s. Tools get added one at a time in Week 2.
+    token in ~0.7 s instead of ~1.5 s. Tools get added one at a time.
     """
     return ClaudeAgentOptions(
         cwd=str(JARVIS_DIR),
         setting_sources=["project"],  # loads CLAUDE.md
         tools=[],
-        mcp_servers={},
+        mcp_servers=mcp_servers or {},
+        allowed_tools=allowed_tools or [],  # anything not listed is refused
         strict_mcp_config=True,
         env={"ENABLE_CLAUDEAI_MCP_SERVERS": "false"},
         include_partial_messages=True,
@@ -66,13 +73,23 @@ def slim_options(resume: str | None = None) -> ClaudeAgentOptions:
 
 
 class SDKBackend:
-    def __init__(self, resume: str | None = None):
+    def __init__(
+        self,
+        resume: str | None = None,
+        mcp_servers: dict | None = None,
+        allowed_tools: list[str] | None = None,
+    ):
         self._resume = resume
+        self._mcp_servers = mcp_servers
+        self._allowed_tools = allowed_tools
         self._client: ClaudeSDKClient | None = None
+
+    def _options(self, resume: str | None) -> ClaudeAgentOptions:
+        return slim_options(resume, self._mcp_servers, self._allowed_tools)
 
     async def _ensure_client(self) -> ClaudeSDKClient:
         if self._client is None:
-            client = ClaudeSDKClient(options=slim_options(self._resume))
+            client = ClaudeSDKClient(options=self._options(self._resume))
             try:
                 await client.connect()
             except Exception:
@@ -82,28 +99,39 @@ class SDKBackend:
                 # Start fresh rather than refusing to talk.
                 log.warning("could not resume session %s; starting a new one", self._resume)
                 self._resume = None
-                client = ClaudeSDKClient(options=slim_options())
+                client = ClaudeSDKClient(options=self._options(None))
                 await client.connect()
             self._client = client
         return self._client
 
     async def turn(self, text: str) -> AsyncIterator[TurnEvent]:
         client = await self._ensure_client()
-        streamed = False
+        streamed = False  # any text streamed this turn
+        need_break = False  # text resumes after a tool call: start a new paragraph
+        saw_events = False
         try:
             await client.query(text)
             async for msg in client.receive_response():
                 if isinstance(msg, StreamEvent):
+                    saw_events = True
                     event = msg.event
                     if event.get("type") == "content_block_delta":
                         delta = event.get("delta", {})
                         if delta.get("type") == "text_delta" and delta.get("text"):
+                            if need_break:
+                                yield ("delta", "\n\n")
+                                need_break = False
                             streamed = True
                             yield ("delta", delta["text"])
-                elif isinstance(msg, AssistantMessage) and not streamed:
-                    text_out = "".join(b.text for b in msg.content if isinstance(b, TextBlock))
-                    if text_out:
-                        yield ("delta", text_out)
+                elif isinstance(msg, AssistantMessage):
+                    for block in msg.content:
+                        if isinstance(block, ToolUseBlock):
+                            yield ("tool", block.name)
+                            need_break = streamed
+                    if not saw_events:  # streaming unavailable: fall back to whole messages
+                        text_out = "".join(b.text for b in msg.content if isinstance(b, TextBlock))
+                        if text_out:
+                            yield ("delta", text_out)
                 elif isinstance(msg, ResultMessage):
                     self._resume = msg.session_id
                     yield (

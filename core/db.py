@@ -66,7 +66,9 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
     """Open the database, apply pragmas and run any pending migrations."""
     path = Path(path) if path else default_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, isolation_level=None)  # autocommit; explicit transactions below
+    # check_same_thread=False: the Core touches the db only from its event-loop thread,
+    # but test clients and uvicorn may open it on a different thread than they use it.
+    conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("pragma journal_mode = wal")
     conn.execute("pragma foreign_keys = on")

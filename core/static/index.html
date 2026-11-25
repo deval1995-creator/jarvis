@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jarvis</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4;
+          --me: #e0ecff; --accent: #2563eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --me: #1e3a5f; --accent: #60a5fa; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg);
+         display: flex; flex-direction: column; height: 100vh; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 16px; margin: 0; }
+  #conn { font-size: 12px; color: var(--muted); }
+  header button { margin-left: auto; }
+  #log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 75ch; padding: 8px 12px; border-radius: 10px; white-space: pre-wrap; }
+  .user { align-self: flex-end; background: var(--me); }
+  .assistant { align-self: flex-start; border: 1px solid var(--line); }
+  .meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .cut::after { content: " [interrupted]"; color: var(--muted); font-size: 12px; }
+  .err { color: #dc2626; }
+  form { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
+  textarea { flex: 1; resize: none; font: inherit; padding: 8px 10px; border-radius: 8px;
+             border: 1px solid var(--line); background: transparent; color: inherit; }
+  button { font: inherit; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--line);
+           background: transparent; color: inherit; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+  #stats { font: 12px ui-monospace, monospace; color: var(--muted); padding: 0 16px 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Jarvis</h1><span id="conn">connecting…</span>
+  <button id="newchat" type="button">New conversation</button>
+</header>
+<div id="log"></div>
+<div id="stats"></div>
+<form id="form">
+  <textarea id="input" rows="2" placeholder="Message Jarvis (Enter to send, Shift+Enter for a new line, Esc to stop)" autofocus></textarea>
+  <button id="stop" type="button">Stop</button>
+  <button class="primary" type="submit">Send</button>
+</form>
+<script>
+const TOKEN = "__JARVIS_TOKEN__";
+const headers = { "X-Jarvis-Token": TOKEN, "Content-Type": "application/json" };
+const log = document.getElementById("log"), input = document.getElementById("input");
+const connEl = document.getElementById("conn"), stats = document.getElementById("stats");
+let ws, current = null;
+
+function add(role, text, source) {
+  const el = document.createElement("div");
+  el.className = "msg " + role;
+  el.textContent = text;
+  if (source && source !== "typed") {
+    const m = document.createElement("div"); m.className = "meta"; m.textContent = source; el.append(m);
+  }
+  log.append(el); log.scrollTop = log.scrollHeight;
+  return el;
+}
+
+async function loadHistory() {
+  const r = await fetch("/api/conversations/current", { headers });
+  const c = await r.json();
+  log.replaceChildren();
+  for (const m of c.messages) add(m.role, m.content, m.source);
+}
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws?token=${encodeURIComponent(TOKEN)}`);
+  ws.onopen = () => { connEl.textContent = "connected"; loadHistory(); };
+  ws.onclose = () => { connEl.textContent = "disconnected, retrying…"; setTimeout(connect, 1500); };
+  ws.onmessage = (e) => {
+    const ev = JSON.parse(e.data);
+    if (ev.type === "start") { add("user", ev.text, ev.source); current = add("assistant", ""); }
+    else if (ev.type === "delta" && current) { current.textContent += ev.text; log.scrollTop = log.scrollHeight; }
+    else if (["done", "interrupted", "error"].includes(ev.type) && "total_ms" in ev) {
+      if (current) {
+        if (ev.type === "interrupted") current.classList.add("cut");
+        if (ev.type === "error") { current.classList.add("err"); current.textContent += (current.textContent ? "\n" : "") + "Error: " + ev.error; }
+      }
+      current = null;
+      stats.textContent = `last turn: first token ${ev.first_token_ms ?? "–"} ms · total ${ev.total_ms} ms`;
+    }
+    else if (ev.type === "new_conversation") { log.replaceChildren(); stats.textContent = ""; }
+    else if (ev.type === "error") { add("assistant", "Error: " + ev.error).classList.add("err"); }
+  };
+}
+
+document.getElementById("form").onsubmit = (e) => {
+  e.preventDefault();
+  const text = input.value.trim();
+  if (!text || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: "message", text, source: "typed" }));
+  input.value = "";
+};
+input.onkeydown = (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); document.getElementById("form").requestSubmit(); }
+};
+const stop = () => ws.send(JSON.stringify({ type: "interrupt" }));
+document.getElementById("stop").onclick = stop;
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") stop(); });
+document.getElementById("newchat").onclick = () => fetch("/api/conversations/new", { method: "POST", headers });
+connect();
+</script>
+</body>
+</html>

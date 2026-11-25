@@ -11,6 +11,9 @@ SQLite memory, local voice. Architecture: see the "Jarvis — Production Archite
 - `scripts/` — one-off tools; `sdk_smoke.py` is the Week 1 go/no-go test
 - `tests/` — pytest
 
+## Run
+    uv run python -m core                         # then open http://127.0.0.1:8765
+
 ## Commands
     uv run pytest                                 # tests
     uv run python scripts/sdk_smoke.py --runs 5   # SDK on your Pro plan + timings

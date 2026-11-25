@@ -22,7 +22,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from core import db, memory, store
+from core import db, memory, memory_review, store
 from core.sessions import SOURCES, BackendFactory, SessionManager
 
 log = logging.getLogger(__name__)
@@ -84,6 +84,9 @@ def create_app(
     backend_factory: BackendFactory | None = None,
     token: str | None = None,
     port: int = DEFAULT_PORT,
+    review_runner: memory_review.Runner | None = None,
+    idle_review_seconds: float = 20 * 60,
+    idle_check_seconds: float = 60,
 ) -> FastAPI:
     if conn is None:
         conn = db.connect()
@@ -114,13 +117,55 @@ def create_app(
             return SDKBackend(resume, mcp_servers={"memory": memory_server}, allowed_tools=ALLOWED_TOOLS)
 
     manager = SessionManager(conn, backend_factory)
+    background_tasks: set[asyncio.Task] = set()
+
+    async def on_review(result: memory_review.ReviewResult) -> None:
+        await hub.broadcast(
+            {
+                "type": "memory_review",
+                "conversation_id": result.conversation_id,
+                "saved": [p["text"] for p in result.saved],
+                "pending": [p["text"] for p in result.pending],
+            }
+        )
+
+    reviewer = memory_review.Reviewer(conn, review_runner or memory_review.sdk_runner, on_result=on_review)
+
+    def review_in_background(conversation_id: str) -> None:
+        task = asyncio.create_task(reviewer.review(conversation_id))
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+
+    async def idle_review_loop() -> None:
+        """Review the current conversation once it has been quiet for a while."""
+        from datetime import datetime, timezone
+
+        while True:
+            await asyncio.sleep(idle_check_seconds)
+            try:
+                if manager.busy or not memory_review.pending_review(conn, manager.conversation_id):
+                    continue
+                row = conn.execute(
+                    "select max(created_at) from messages where conversation_id = ?", (manager.conversation_id,)
+                ).fetchone()
+                if row[0] is None:
+                    continue
+                quiet = datetime.now(timezone.utc) - datetime.fromisoformat(row[0])
+                if quiet.total_seconds() >= idle_review_seconds:
+                    await reviewer.review(manager.conversation_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("idle review check failed")
     allowed_origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
     turn_tasks: set[asyncio.Task] = set()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        watcher = asyncio.create_task(idle_review_loop())
         yield
-        for task in turn_tasks:
+        watcher.cancel()
+        for task in turn_tasks | background_tasks:
             task.cancel()
         await manager.close()
 
@@ -174,7 +219,9 @@ def create_app(
 
     @app.post("/api/conversations/new", dependencies=[Depends(require_token)])
     async def new_conversation() -> dict:
+        ended = manager.conversation_id
         conversation_id = await manager.new_conversation()
+        review_in_background(ended)
         await hub.broadcast({"type": "new_conversation", "conversation_id": conversation_id})
         return {"conversation_id": conversation_id}
 
@@ -226,6 +273,22 @@ def create_app(
     async def put_local_only(body: LocalOnlyIn) -> dict:
         memory.set_local_only_categories(conn, body.categories)
         return {"categories": memory.local_only_categories(conn)}
+
+    @app.post("/api/memory/review", dependencies=[Depends(require_token)])
+    async def review_now() -> dict:
+        """Review the current conversation now instead of waiting for it to go quiet."""
+        result = await reviewer.review(manager.conversation_id)
+        if result is None:
+            raise HTTPException(status_code=502, detail="review failed; see the Core log")
+        return {
+            "reviewed_messages": result.reviewed_messages,
+            "saved": [p["text"] for p in result.saved],
+            "pending": [p["text"] for p in result.pending],
+            "skipped_duplicates": result.skipped_duplicates,
+            "skipped_low_confidence": result.skipped_low_confidence,
+            "summary": result.summary,
+            "skipped_reason": result.skipped_reason,
+        }
 
     @app.get("/api/memory/settings/auto-approve", dependencies=[Depends(require_token)])
     async def get_auto_approve() -> dict:

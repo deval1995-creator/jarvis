@@ -191,6 +191,14 @@ function connect() {
     else if (ev.type === "tool" && current) { toolNote(ev.name); }
     else if (ev.type === "memory_proposal") { loadInbox(); }
     else if (ev.type === "memory_decided") { loadInbox(); loadMemories(); }
+    else if (ev.type === "memory_review") {
+      const parts = [];
+      if (ev.saved.length) parts.push("saved " + ev.saved.join("; "));
+      if (ev.pending.length) parts.push(ev.pending.length + " waiting for your approval");
+      const note = el("div", "toolnote", "· looked back over the conversation: " + parts.join(", "));
+      log.append(note); log.scrollTop = log.scrollHeight;
+      loadInbox(); loadMemories();
+    }
     else if (["done", "interrupted", "error"].includes(ev.type) && "total_ms" in ev) {
       if (current) {
         if (ev.type === "interrupted") current.classList.add("cut");

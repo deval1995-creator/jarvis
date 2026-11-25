@@ -6,6 +6,10 @@ from core.api import create_app
 from tests.fakes import FakeBackend
 
 TOKEN = "test-token"
+
+
+async def no_claude_review(system_prompt, prompt):
+    return {"memories": [], "summary": "test"}, None
 AUTH = {"X-Jarvis-Token": TOKEN}
 ORIGIN = {"origin": "http://127.0.0.1:8765"}
 WS = "ws://127.0.0.1:8765/ws"  # absolute: a relative URL sends Host: testserver
@@ -14,7 +18,7 @@ WS = "ws://127.0.0.1:8765/ws"  # absolute: a relative URL sends Host: testserver
 @pytest.fixture
 def client(tmp_path):
     conn = db.connect(tmp_path / "jarvis.db")
-    app = create_app(conn=conn, backend_factory=FakeBackend, token=TOKEN)
+    app = create_app(conn=conn, backend_factory=FakeBackend, token=TOKEN, review_runner=no_claude_review)
     with TestClient(app, base_url="http://127.0.0.1:8765") as c:
         yield c
     conn.close()
@@ -92,3 +96,28 @@ def test_new_conversation(client):
     new = client.post("/api/conversations/new", headers=AUTH).json()["conversation_id"]
     assert new != old
     assert len(client.get("/api/conversations", headers=AUTH).json()) == 2
+
+
+def test_idle_conversation_gets_reviewed(tmp_path):
+    import time
+
+    calls = []
+
+    async def runner(system_prompt, prompt):
+        calls.append(prompt)
+        return {"memories": [{"text": "Deval's sister Priya lives in Pune.", "kind": "fact", "importance": 3,
+                              "confidence": 1.0, "reason": "stated"}], "summary": "Family news."}, None
+
+    conn = db.connect(tmp_path / "jarvis.db")
+    app = create_app(conn=conn, backend_factory=FakeBackend, token=TOKEN, review_runner=runner,
+                     idle_review_seconds=0, idle_check_seconds=0.05)
+    with TestClient(app, base_url="http://127.0.0.1:8765") as c:
+        c.post("/api/message", json={"text": "My sister Priya just moved to Pune for a new job."}, headers=AUTH)
+        deadline = time.time() + 5
+        while not calls and time.time() < deadline:
+            time.sleep(0.05)
+        time.sleep(0.2)
+        assert len(calls) == 1  # reviewed once, not again on later checks
+        saved = c.get("/api/memory", headers=AUTH).json()
+        assert [m["text"] for m in saved] == ["Deval's sister Priya lives in Pune."]
+    conn.close()

@@ -21,6 +21,10 @@ from tests.fakes import FakeBackend
 TOKEN = "live-token"
 
 
+async def no_claude_review(system_prompt, prompt):
+    return {"memories": [], "summary": "test"}, None
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -30,7 +34,7 @@ def free_port() -> int:
 @pytest.fixture
 def server(tmp_path):
     port = free_port()
-    app = create_app(conn=db.connect(tmp_path / "jarvis.db"), backend_factory=FakeBackend, token=TOKEN, port=port)
+    app = create_app(conn=db.connect(tmp_path / "jarvis.db"), backend_factory=FakeBackend, token=TOKEN, port=port, review_runner=no_claude_review)
     srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=srv.run, daemon=True)
     thread.start()

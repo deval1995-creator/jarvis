@@ -119,6 +119,10 @@ MIGRATIONS: list[str] = [
     alter table memory_proposals add column decided_by text;     -- auto | deval
     insert into settings (key, value) values ('auto_approve', 'true');
     """,
+    # v5: end-of-conversation memory review only looks at messages it hasn't seen.
+    """
+    alter table conversations add column reviewed_through integer not null default 0;  -- last message id reviewed
+    """,
 ]
 
 

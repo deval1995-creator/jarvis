@@ -48,6 +48,10 @@ MIGRATIONS: list[str] = [
         created_at        text not null
     );
     """,
+    # v2: tokens written to the prompt cache also count against your limits
+    """
+    alter table usage add column cache_creation_tokens integer;
+    """,
 ]
 
 
@@ -109,14 +113,15 @@ def record_usage(
     usage = usage or {}
     conn.execute(
         "insert into usage (claude_session_id, kind, input_tokens, output_tokens,"
-        " cache_read_tokens, cost_usd, duration_ms, first_token_ms, created_at)"
-        " values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " cache_read_tokens, cache_creation_tokens, cost_usd, duration_ms, first_token_ms, created_at)"
+        " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             claude_session_id,
             kind,
             usage.get("input_tokens"),
             usage.get("output_tokens"),
             usage.get("cache_read_input_tokens"),
+            usage.get("cache_creation_input_tokens"),
             cost_usd,
             duration_ms,
             first_token_ms,

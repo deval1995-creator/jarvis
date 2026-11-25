@@ -33,7 +33,7 @@ class FakeBackend:
             TurnResult(
                 session_id=self.session_id,
                 is_error=self._interrupted,
-                usage={"input_tokens": 3, "output_tokens": 7, "cache_read_input_tokens": 500},
+                usage={"input_tokens": 3, "output_tokens": 7, "cache_read_input_tokens": 500, "cache_creation_input_tokens": 40},
                 cost_usd=0.0,
             ),
         )

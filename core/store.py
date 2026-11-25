@@ -78,7 +78,8 @@ def usage_since(conn: sqlite3.Connection, since_iso: str) -> dict:
     row = conn.execute(
         "select count(*) as turns, coalesce(sum(input_tokens), 0) as input_tokens,"
         " coalesce(sum(output_tokens), 0) as output_tokens,"
-        " coalesce(sum(cache_read_tokens), 0) as cache_read_tokens"
+        " coalesce(sum(cache_read_tokens), 0) as cache_read_tokens,"
+        " coalesce(sum(cache_creation_tokens), 0) as cache_creation_tokens"
         " from usage where created_at >= ?",
         (since_iso,),
     ).fetchone()

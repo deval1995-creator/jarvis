@@ -110,7 +110,8 @@ async def main() -> int:
             u = res.usage or {}
             print(
                 f"  first token {r['first_token_ms']} ms | total {r['total_ms']} ms | "
-                f"in {u.get('input_tokens')} (+{u.get('cache_read_input_tokens')} cached) "
+                f"in {u.get('input_tokens')} (+{u.get('cache_read_input_tokens')} cache read,"
+                f" +{u.get('cache_creation_input_tokens')} cache write) "
                 f"out {u.get('output_tokens')} | session {res.session_id}"
             )
 

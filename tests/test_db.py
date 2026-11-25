@@ -42,11 +42,34 @@ def test_record_usage(conn):
         conn,
         kind="test",
         claude_session_id="s1",
-        usage={"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 100},
+        usage={"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 20},
         cost_usd=0.001,
         duration_ms=1200,
         first_token_ms=800,
     )
     row = conn.execute("select * from usage").fetchone()
-    assert (row["input_tokens"], row["output_tokens"], row["cache_read_tokens"]) == (10, 5, 100)
+    assert (row["input_tokens"], row["output_tokens"], row["cache_read_tokens"], row["cache_creation_tokens"]) == (
+        10,
+        5,
+        100,
+        20,
+    )
     assert row["first_token_ms"] == 800
+
+
+def test_upgrades_v1_database_in_place(tmp_path):
+    """A database made before v2 gains the new column and keeps its rows."""
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path, isolation_level=None)
+    for statement in db.MIGRATIONS[0].split(";"):
+        if statement.strip():
+            old.execute(statement)
+    old.execute("pragma user_version = 1")
+    old.execute("insert into usage (kind, input_tokens, created_at) values ('chat', 7, 'x')")
+    old.close()
+
+    c = db.connect(path)
+    assert db.schema_version(c) == len(db.MIGRATIONS)
+    row = c.execute("select input_tokens, cache_creation_tokens from usage").fetchone()
+    assert (row[0], row[1]) == (7, None)
+    c.close()

@@ -48,6 +48,45 @@ def _visible_clause(conn: sqlite3.Connection) -> tuple[str, list]:
     return f" and (m.category is null or lower(m.category) not in ({marks}))", local
 
 
+def auto_approve_enabled(conn: sqlite3.Connection) -> bool:
+    row = conn.execute("select value from settings where key = 'auto_approve'").fetchone()
+    return row is None or row[0] == "true"
+
+
+def set_auto_approve(conn: sqlite3.Connection, enabled: bool) -> None:
+    conn.execute(
+        "insert into settings (key, value) values ('auto_approve', ?)"
+        " on conflict(key) do update set value = excluded.value",
+        ("true" if enabled else "false",),
+    )
+
+
+def review_reason(
+    conn: sqlite3.Connection,
+    action: str,
+    *,
+    memory_id: int | None,
+    category: str | None,
+    untrusted: bool = False,
+) -> str | None:
+    """Why a proposal needs Deval's review, or None if it can be saved at once."""
+    if untrusted:
+        return "proposed after reading email, web or file content"
+    sensitive = set(local_only_categories(conn))
+    if category and category.strip().lower() in sensitive:
+        return f"sensitive category: {category.strip().lower()}"
+    if action in ("update", "forget") and memory_id is not None:
+        old = conn.execute("select category, importance, pinned from memories where id = ?", (memory_id,)).fetchone()
+        if old is not None:
+            if old["category"] and old["category"].lower() in sensitive:
+                return f"changes a memory in a sensitive category: {old['category']}"
+            if old["pinned"]:
+                return "changes a pinned memory"
+            if old["importance"] >= 5:
+                return "changes one of your most important memories"
+    return None
+
+
 # ---------- proposals ----------
 
 
@@ -77,8 +116,10 @@ def propose(
     source: str | None = None,
     conversation_id: str | None = None,
     origin: str = "chat",
+    untrusted: bool = False,
 ) -> dict:
-    """Record a pending change. Returns the proposal as a dict."""
+    """Record a pending change. Returns the proposal as a dict, with
+    `review_reason` set when it is critical enough to need Deval."""
     if action == "remember":
         if not text or not text.strip():
             raise MemoryError("remember needs text")
@@ -114,10 +155,11 @@ def propose(
     if dup:
         return get_proposal(conn, dup[0])
 
+    needs = review_reason(conn, action, memory_id=memory_id, category=category, untrusted=untrusted)
     cur = conn.execute(
         "insert into memory_proposals (action, memory_id, kind, category, text, importance, confidence,"
-        " people, reason, source, conversation_id, origin, created_at)"
-        " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " people, reason, source, conversation_id, origin, created_at, review_reason)"
+        " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             action,
             memory_id,
@@ -132,9 +174,18 @@ def propose(
             conversation_id,
             origin,
             utc_now(),
+            needs,
         ),
     )
     return get_proposal(conn, cur.lastrowid)
+
+
+def propose_and_maybe_apply(conn: sqlite3.Connection, action: str, **kwargs) -> dict:
+    """Propose, then save at once unless it needs review (or auto-approve is off)."""
+    p = propose(conn, action, **kwargs)
+    if p["status"] == "pending" and p["review_reason"] is None and auto_approve_enabled(conn):
+        p = approve(conn, p["id"], decided_by="auto")
+    return p
 
 
 def get_proposal(conn: sqlite3.Connection, proposal_id: int) -> dict:
@@ -193,7 +244,9 @@ def _archive(conn: sqlite3.Connection, memory_id: int) -> None:
     )
 
 
-def approve(conn: sqlite3.Connection, proposal_id: int, edited_text: str | None = None) -> dict:
+def approve(
+    conn: sqlite3.Connection, proposal_id: int, edited_text: str | None = None, decided_by: str = "deval"
+) -> dict:
     """Apply a pending proposal. Deval may tweak the text before approving."""
     p = get_proposal(conn, proposal_id)
     if p["status"] != "pending":
@@ -223,9 +276,9 @@ def approve(conn: sqlite3.Connection, proposal_id: int, edited_text: str | None 
             _archive(conn, p["memory_id"])
             result = p["memory_id"]
         conn.execute(
-            "update memory_proposals set status = 'approved', decided_at = ?, result_memory_id = ?, text = ?"
-            " where id = ?",
-            (utc_now(), result, p["text"], proposal_id),
+            "update memory_proposals set status = 'approved', decided_at = ?, result_memory_id = ?, text = ?,"
+            " decided_by = ? where id = ?",
+            (utc_now(), result, p["text"], decided_by, proposal_id),
         )
         conn.execute("commit")
     except Exception:
@@ -239,7 +292,8 @@ def reject(conn: sqlite3.Connection, proposal_id: int) -> dict:
     if p["status"] != "pending":
         raise MemoryError(f"proposal {proposal_id} is already {p['status']}")
     conn.execute(
-        "update memory_proposals set status = 'rejected', decided_at = ? where id = ?", (utc_now(), proposal_id)
+        "update memory_proposals set status = 'rejected', decided_at = ?, decided_by = 'deval' where id = ?",
+        (utc_now(), proposal_id),
     )
     return get_proposal(conn, proposal_id)
 

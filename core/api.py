@@ -61,6 +61,10 @@ class LocalOnlyIn(BaseModel):
     categories: list[str]
 
 
+class AutoApproveIn(BaseModel):
+    enabled: bool
+
+
 class Hub:
     """Fans turn events out to every connected window, so they stay in sync."""
 
@@ -88,7 +92,8 @@ def create_app(
     hub = Hub()
 
     async def on_proposal(p: dict) -> None:
-        await hub.broadcast({"type": "memory_proposal", "proposal": p})
+        kind = "memory_decided" if p["status"] != "pending" else "memory_proposal"
+        await hub.broadcast({"type": kind, "proposal": p})
 
     if backend_factory is None:
         from core.backend import SDKBackend
@@ -97,7 +102,11 @@ def create_app(
         # `manager` is bound below; the lambda reads it at call time.
         memory_server = build_memory_server(
             conn,
-            context=lambda: {"conversation_id": manager.conversation_id, "source": manager.current_source},
+            context=lambda: {
+                "conversation_id": manager.conversation_id,
+                "source": manager.current_source,
+                "untrusted": False,  # becomes per-session once email/web tools exist (Week 2 step 3)
+            },
             on_proposal=on_proposal,
         )
 
@@ -217,6 +226,15 @@ def create_app(
     async def put_local_only(body: LocalOnlyIn) -> dict:
         memory.set_local_only_categories(conn, body.categories)
         return {"categories": memory.local_only_categories(conn)}
+
+    @app.get("/api/memory/settings/auto-approve", dependencies=[Depends(require_token)])
+    async def get_auto_approve() -> dict:
+        return {"enabled": memory.auto_approve_enabled(conn)}
+
+    @app.put("/api/memory/settings/auto-approve", dependencies=[Depends(require_token)])
+    async def put_auto_approve(body: AutoApproveIn) -> dict:
+        memory.set_auto_approve(conn, body.enabled)
+        return {"enabled": memory.auto_approve_enabled(conn)}
 
     @app.get("/api/status", dependencies=[Depends(require_token)])
     async def get_status() -> dict:

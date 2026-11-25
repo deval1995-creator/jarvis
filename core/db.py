@@ -113,6 +113,12 @@ MIGRATIONS: list[str] = [
     create table settings (key text primary key, value text not null);
     insert into settings (key, value) values ('local_only_categories', '["health", "finances"]');
     """,
+    # v4: auto-approve. Deval reviews only critical proposals; the rest save at once.
+    """
+    alter table memory_proposals add column review_reason text;  -- why it needs Deval, or null
+    alter table memory_proposals add column decided_by text;     -- auto | deval
+    insert into settings (key, value) values ('auto_approve', 'true');
+    """,
 ]
 
 

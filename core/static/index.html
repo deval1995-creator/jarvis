@@ -65,7 +65,8 @@
   </form>
 </main>
 <aside>
-  <h2>Memory inbox <span id="inboxCount" hidden></span></h2>
+  <label class="empty"><input type="checkbox" id="autosave"> Save memories automatically (asks only for critical ones)</label>
+  <h2>Needs your approval <span id="inboxCount" hidden></span></h2>
   <div id="inbox"></div>
   <h2>Saved memories</h2>
   <input type="search" id="memq" placeholder="Search memories">
@@ -97,8 +98,8 @@ function add(role, text, source) {
   return m;
 }
 
-const TOOL_LABELS = { recall: "checked memory", get_profile: "loaded your profile", remember: "proposed a memory",
-                      update: "proposed a memory change", forget: "proposed forgetting a memory", log: "proposed a journal entry" };
+const TOOL_LABELS = { recall: "checked memory", get_profile: "loaded your profile", remember: "noted to memory",
+                      update: "updated a memory", forget: "removed a memory", log: "added a journal entry" };
 function toolNote(name) {
   const short = name.replace(/^mcp__\w+?__/, "");
   const note = el("div", "toolnote", "· " + (TOOL_LABELS[short] || "used " + short));
@@ -118,7 +119,7 @@ function proposalCard(p) {
   c.append(el("div", "tag", [p.action, p.kind, p.category, p.confidence && p.confidence < 1 ? "inferred" : null]
     .filter(Boolean).join(" · ")));
   c.append(el("div", "", describe(p)));
-  if (p.reason) c.append(el("div", "why", p.reason));
+  if (p.review_reason) c.append(el("div", "why", "Needs you: " + p.review_reason));
   const actions = el("div", "actions");
   const yes = el("button", "primary", "Approve"), edit = el("button", "", "Edit"), no = el("button", "", "Reject");
   let editor = null;
@@ -143,6 +144,7 @@ async function loadInbox() {
   const items = await api("/api/memory/proposals");
   const box = $("inbox");
   box.replaceChildren(...(items.length ? items.map(proposalCard) : [el("div", "empty", "Nothing waiting.")]));
+  $("autosave").checked = (await api("/api/memory/settings/auto-approve")).enabled;
   $("inboxCount").hidden = !items.length;
   $("inboxCount").textContent = items.length;
 }
@@ -165,6 +167,8 @@ async function loadMemories() {
     return c;
   }) : [el("div", "empty", q ? "No matches." : "No memories saved yet.")]));
 }
+$("autosave").onchange = (e) => api("/api/memory/settings/auto-approve",
+  { method: "PUT", body: JSON.stringify({ enabled: e.target.checked }) });
 let memTimer;
 $("memq").oninput = () => { clearTimeout(memTimer); memTimer = setTimeout(loadMemories, 250); };
 

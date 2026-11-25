@@ -137,13 +137,25 @@ def server(conn, monkeypatch):
     return srv
 
 
-def test_tool_remember_only_proposes(conn, server):
-    result, body = call_tool(server, "remember", {"text": "Deval's wife is Asha.", "people": ["Asha"]})
-    assert body["status"] == "pending"
-    assert server["_proposals"][0]["conversation_id"] == "c1"
-    assert server["_proposals"][0]["source"] == "voice"
+def test_tool_remember_saves_at_once(conn, server):
+    _, body = call_tool(server, "remember", {"text": "Deval's wife is Asha.", "people": ["Asha"]})
+    assert body["status"] == "saved"
+    p = server["_proposals"][0]
+    assert (p["conversation_id"], p["source"], p["decided_by"]) == ("c1", "voice", "auto")
     _, found = call_tool(server, "recall", {"query": "wife"})
-    assert found["memories"] == []
+    assert found["memories"][0]["text"] == "Deval's wife is Asha."
+
+
+def test_tool_sensitive_memory_waits_for_review(conn, server):
+    _, body = call_tool(server, "remember", {"text": "Deval takes vitamin D.", "category": "Health"})
+    assert body["status"] == "pending" and "sensitive" in body["note"]
+    assert memory.list_proposals(conn)[0]["review_reason"] == "sensitive category: health"
+
+
+def test_tool_respects_auto_approve_off(conn, server):
+    memory.set_auto_approve(conn, False)
+    _, body = call_tool(server, "remember", {"text": "Deval likes tea."})
+    assert body["status"] == "pending" and "auto-save is off" in body["note"]
 
 
 def test_tool_recall_and_profile(conn, server):
@@ -159,7 +171,40 @@ def test_tool_errors_are_reported_not_raised(conn, server):
     assert result["is_error"] and "no active memory" in result["content"][0]["text"]
 
 
-def test_tool_log_is_a_journal_proposal(conn, server):
+def test_tool_log_is_a_journal_entry(conn, server):
     call_tool(server, "log", {"text": "Good trading day, followed the plan.", "category": "trading"})
-    [p] = memory.list_proposals(conn)
-    assert (p["kind"], p["importance"]) == ("journal", 2)
+    [m] = memory.recall(conn, "trading day")
+    assert (m["kind"], m["importance"]) == ("journal", 2)
+
+
+# ----- what counts as critical -----
+
+
+def needs(conn, action, **kw):
+    return memory.propose_and_maybe_apply(conn, action, **kw)
+
+
+def test_ordinary_remember_update_forget_save_at_once(conn):
+    p = needs(conn, "remember", text="Deval drinks coffee black.", category="home")
+    assert (p["status"], p["decided_by"]) == ("approved", "auto")
+    mid = p["result_memory_id"]
+    assert needs(conn, "update", memory_id=mid, text="Deval drinks coffee with oat milk.")["status"] == "approved"
+    [m] = memory.recall(conn, "coffee")
+    assert needs(conn, "forget", memory_id=m["id"])["status"] == "approved"
+    assert memory.recall(conn, "coffee") == []
+
+
+def test_critical_changes_wait(conn):
+    important = remember(conn, "Deval's CFA exam is in August.", importance=5)
+    pinned = remember(conn, "Deval's son is Kabir.")
+    memory.edit_memory(conn, pinned, pinned=1)
+    money = remember(conn, "Deval's savings goal is X.", category="finances")
+
+    assert "most important" in needs(conn, "forget", memory_id=important)["review_reason"]
+    assert "pinned" in needs(conn, "update", memory_id=pinned, text="Deval's son is Kabir, age 4.")["review_reason"]
+    assert "sensitive" in needs(conn, "update", memory_id=money, text="Deval's savings goal is Y.")["review_reason"]
+    assert "email" in needs(conn, "remember", text="Wire money to Bob.", untrusted=True)["review_reason"]
+    # none of them took effect
+    assert memory.recall(conn, "CFA")[0]["id"] == important
+    assert len(memory.list_proposals(conn)) == 4
+

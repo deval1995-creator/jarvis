@@ -30,9 +30,10 @@ def _err(message: str) -> dict:
     return {"content": [{"type": "text", "text": message}], "is_error": True}
 
 
+SAVED_NOTE = "Saved. Mention it in a few words at most (e.g. \"noted\"); don't make a fuss."
 PENDING_NOTE = (
-    "Proposed, not saved yet. It appears in Deval's memory inbox and takes effect only "
-    "when Deval approves it. Tell Deval it's waiting for approval."
+    "Not saved yet: this one needs Deval's approval ({why}). It's in the memory inbox; "
+    "tell Deval in a few words that it's waiting for approval there."
 )
 
 
@@ -41,23 +42,31 @@ def build_memory_server(
     context: Callable[[], dict],
     on_proposal: OnProposal | None = None,
 ):
-    """`context()` returns {"conversation_id", "source"} for the current turn."""
+    """`context()` returns {"conversation_id", "source", "untrusted"} for the current turn.
+
+    `untrusted` is True once the session has read email, web or file content;
+    memory writes then always wait for Deval's review.
+    """
 
     async def _propose(action: str, **kwargs) -> dict:
         try:
             ctx = context()
-            p = memory.propose(
+            p = memory.propose_and_maybe_apply(
                 conn,
                 action,
                 conversation_id=ctx.get("conversation_id"),
                 source=ctx.get("source"),
+                untrusted=bool(ctx.get("untrusted")),
                 **kwargs,
             )
         except memory.MemoryError as e:
             return _err(str(e))
         if on_proposal is not None:
             await on_proposal(p)
-        return _ok({"proposal_id": p["id"], "status": "pending", "note": PENDING_NOTE})
+        if p["status"] == "approved":
+            return _ok({"status": "saved", "memory_id": p["result_memory_id"], "note": SAVED_NOTE})
+        why = p["review_reason"] or "auto-save is off"
+        return _ok({"proposal_id": p["id"], "status": "pending", "note": PENDING_NOTE.format(why=why)})
 
     @tool(
         "get_profile",
@@ -87,7 +96,7 @@ def build_memory_server(
 
     @tool(
         "remember",
-        "Propose saving a new long-term memory. Deval must approve it before it is stored. "
+        "Save a new long-term memory. Most are saved at once; sensitive ones wait for Deval's approval. "
         "Write the text as a standalone fact, e.g. \"Deval prefers morning meetings.\" Set confidence below 1 "
         "for things you inferred rather than were told.",
         {
@@ -118,7 +127,7 @@ def build_memory_server(
 
     @tool(
         "update",
-        "Propose replacing an existing memory (by id from recall) with corrected text. Needs Deval's approval.",
+        "Replace an existing memory (by id from recall) with corrected text. The old version is kept in history.",
         {
             "type": "object",
             "properties": {
@@ -134,7 +143,7 @@ def build_memory_server(
 
     @tool(
         "forget",
-        "Propose removing a memory (by id from recall). Needs Deval's approval.",
+        "Remove a memory (by id from recall). It is archived, not destroyed.",
         {
             "type": "object",
             "properties": {"memory_id": {"type": "integer"}, "reason": {"type": "string"}},
@@ -146,7 +155,7 @@ def build_memory_server(
 
     @tool(
         "log",
-        "Propose a journal entry (what happened, how a day or trade went). Needs Deval's approval.",
+        "Add a journal entry (what happened, how a day or trade went).",
         {
             "type": "object",
             "properties": {"text": {"type": "string"}, "category": {"type": "string"}},

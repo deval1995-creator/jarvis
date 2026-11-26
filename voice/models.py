@@ -104,7 +104,11 @@ def make_stt() -> SharedWhisperSTTService:
 
 
 def make_tts(**kwargs) -> kokoro_tts.KokoroTTSService:
-    return kokoro_tts.KokoroTTSService(settings=kokoro_tts.KokoroTTSService.Settings(voice=VOICE), **kwargs)
+    # Kokoro voice names start with an accent letter: a = American, b = British.
+    language = Language.EN_GB if VOICE.startswith("b") else Language.EN_US
+    return kokoro_tts.KokoroTTSService(
+        settings=kokoro_tts.KokoroTTSService.Settings(voice=VOICE, language=language), **kwargs
+    )
 
 
 def preload() -> None:
@@ -118,5 +122,5 @@ def preload() -> None:
     for whisper in _whisper.values():
         list(whisper.transcribe(np.zeros(16000, dtype=np.float32), language="en")[0])
     for kokoro in _kokoro.values():
-        kokoro.create("Ready.", voice=VOICE, lang="en-us")
+        kokoro.create("Ready.", voice=VOICE, lang="en-gb" if VOICE.startswith("b") else "en-us")
     log.info("speech models ready")

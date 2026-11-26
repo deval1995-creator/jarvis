@@ -7,7 +7,7 @@
   let pc = null, dc = null, mic = null, ping = null, held = false;
   let mode = localStorage.getItem("voiceMode") || "ptt";
   let state = "off";  // off | connecting | idle | listening | thinking | speaking
-  let audioCtx = null, analyser = null, tickTimer = null;
+  let audioCtx = null, analyser = null, micAnalyser = null, tickTimer = null;
   const audioEl = new Audio();
   audioEl.autoplay = true;
 
@@ -85,6 +85,9 @@
       mic = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
+      audioCtx = audioCtx || new AudioContext();
+      micAnalyser = audioCtx.createAnalyser(); micAnalyser.fftSize = 512;
+      audioCtx.createMediaStreamSource(mic).connect(micAnalyser);
       pc = new RTCPeerConnection();
       pc.addTransceiver(mic.getAudioTracks()[0], { direction: "sendrecv" });
       pc.addTransceiver("video", { direction: "sendrecv" });  // the server expects these slots
@@ -132,7 +135,7 @@
     try { dc?.close(); } catch {}
     try { pc?.close(); } catch {}
     mic?.getTracks().forEach((t) => t.stop());  // the mic light goes off
-    pc = dc = mic = null;
+    pc = dc = mic = micAnalyser = null;
     setState("off");
   }
 
@@ -142,7 +145,17 @@
     if (muted) disconnect(); else connect();
   }
 
+  // Loudness 0..1 of your mic and of Jarvis's voice (for the orb).
+  const buf = new Float32Array(512);
+  function level(a) {
+    if (!a) return 0;
+    a.getFloatTimeDomainData(buf);
+    let sum = 0; for (const x of buf) sum += x * x;
+    return Math.min(1, Math.sqrt(sum / buf.length) * 6);
+  }
+
   window.jarvisVoice = {
+    levels: () => ({ mic: held || mode === "hands-free" ? level(micAnalyser) : 0, out: level(analyser) }),
     connect, disconnect, ptt, setMuted,
     toggleMute: () => setMuted(micState() !== "off"),
     get mode() { return mode; },

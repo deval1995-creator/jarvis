@@ -32,8 +32,8 @@ WHISPER_PROMPT = os.environ.get("JARVIS_WHISPER_PROMPT", "Deval talking to Jarvi
 # folder (speech_debug), to tell bad audio from bad recognition. Off by default.
 SAVE_SPEECH = os.environ.get("JARVIS_SAVE_SPEECH") == "1"
 # A Kokoro voice ("bm_george") or a blend of them ("bm_george:0.6+bm_fable:0.4").
-VOICE = os.environ.get("JARVIS_VOICE", "bm_george")
-VOICE_SPEED = float(os.environ.get("JARVIS_VOICE_SPEED", "1.0"))
+VOICE = os.environ.get("JARVIS_VOICE", "bm_fable")
+VOICE_SPEED = float(os.environ.get("JARVIS_VOICE_SPEED", "1.05"))
 # Voice names start with an accent letter: a = American, b = British.
 VOICE_LANG = "en-gb" if all(part.strip().startswith("b") for part in VOICE.split("+")) else "en-us"
 TTS_DEVICE = os.environ.get("JARVIS_TTS_DEVICE", "cuda")

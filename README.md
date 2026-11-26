@@ -21,8 +21,8 @@ SQLite memory, local voice. Architecture: see the "Jarvis — Production Archite
 The voice service needs the Core running. First start downloads Whisper large-v3-turbo
 (~1.6 GB) and Kokoro (~350 MB). Both run on the GPU (CUDA 12 and cuDNN 9 come from pip
 wheels; no CUDA install needed). Settings (environment variables): `JARVIS_VOICE`
-(Kokoro voice or a blend like `bm_george:0.6+bm_fable:0.4`, default `bm_george`),
-`JARVIS_VOICE_SPEED` (default 1.0), `JARVIS_WHISPER_MODEL`, `JARVIS_WHISPER_DEVICE` and
+(Kokoro voice or a blend like `bm_george:0.6+bm_fable:0.4`, default `bm_fable`),
+`JARVIS_VOICE_SPEED` (default 1.05), `JARVIS_WHISPER_MODEL`, `JARVIS_WHISPER_DEVICE` and
 `JARVIS_TTS_DEVICE` (`cuda` or `cpu`), `JARVIS_VAD_START_SECS` (hands-free: how much
 speech counts as talking over Jarvis, default 0.2).
 

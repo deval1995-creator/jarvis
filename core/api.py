@@ -99,9 +99,16 @@ def create_app(
         kind = "memory_decided" if p["status"] != "pending" else "memory_proposal"
         await hub.broadcast({"type": kind, "proposal": p})
 
+    from core.display_mcp import WindowBoard
+
+    board = WindowBoard(on_change=hub.broadcast)  # windows Jarvis opens on the page
+
     if backend_factory is None:
+        from core import display_mcp
         from core.backend import SDKBackend
         from core.memory_mcp import ALLOWED_TOOLS, build_memory_server
+
+        display_server = display_mcp.build_display_server(board)
 
         # `manager` is bound below; the lambda reads it at call time.
         memory_server = build_memory_server(
@@ -117,8 +124,8 @@ def create_app(
         def backend_factory(resume):
             return SDKBackend(
                 resume,
-                mcp_servers={"memory": memory_server},
-                allowed_tools=ALLOWED_TOOLS,
+                mcp_servers={"memory": memory_server, "display": display_server},
+                allowed_tools=ALLOWED_TOOLS + display_mcp.ALLOWED_TOOLS,
                 connectors=connectors,
                 before_tool=before_tool,
                 after_tool=after_tool,
@@ -240,6 +247,7 @@ def create_app(
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
     app.state.manager = manager
     app.state.broker = broker
+    app.state.board = board
     app.state.tool_hooks = {"before": before_tool, "after": after_tool, "gate": permission_gate}
 
     def require_token(x_jarvis_token: str = Header(default="")) -> None:
@@ -410,6 +418,14 @@ def create_app(
     @app.get("/api/audit", dependencies=[Depends(require_token)])
     async def get_audit(limit: int = 100) -> list[dict]:
         return audit.recent(conn, min(limit, 1000))
+
+    @app.get("/api/windows", dependencies=[Depends(require_token)])
+    async def list_windows() -> list[dict]:
+        return board.list()
+
+    @app.delete("/api/windows/{window_id}", dependencies=[Depends(require_token)])
+    async def close_window(window_id: str) -> dict:
+        return {"closed": await board.close(window_id)}
 
     @app.get("/api/status", dependencies=[Depends(require_token)])
     async def get_status() -> dict:

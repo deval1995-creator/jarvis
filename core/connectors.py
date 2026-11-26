@@ -1,7 +1,8 @@
 """Which claude.ai connectors Jarvis may use, and how.
 
-Claude Code loads every claude.ai connector the account has. Jarvis needs two,
-read-only. Three layers keep it that way:
+Claude Code loads every claude.ai connector the account has. Jarvis uses three:
+Gmail and Calendar (reads free, actions with approval) and Interactive Brokers
+(read-only; trading tools are blocked). Three layers keep it that way:
 
 1. Selection: at startup the Core switches off every other MCP server for
    Jarvis's home folder (Claude Code remembers this per folder), so they stop
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from claude_agent_sdk import PermissionResultDeny
 
@@ -24,19 +26,28 @@ log = logging.getLogger(__name__)
 
 GMAIL = "claude.ai Gmail"
 CALENDAR = "claude.ai Google Calendar"
-ALLOWED_SERVERS = {GMAIL, CALENDAR}
-OWN_SERVERS = {"memory"}  # Jarvis's in-process servers: never switched off
+IBKR = "claude.ai Interactive Brokers (IBKR)"
+ALLOWED_SERVERS = {GMAIL, CALENDAR, IBKR}
+OWN_SERVERS = {"memory", "display"}  # Jarvis's in-process servers: never switched off
 
 
 def _prefix(server_name: str) -> str:
-    """'claude.ai Google Calendar' -> 'mcp__claude_ai_Google_Calendar__'"""
-    slug = "".join(ch if ch.isalnum() else "_" for ch in server_name)
+    """'claude.ai Interactive Brokers (IBKR)' -> 'mcp__claude_ai_Interactive_Brokers_IBKR__'
+
+    Claude Code turns each run of other characters into one underscore."""
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", server_name).strip("_")
     return f"mcp__{slug}__"
 
 
 READ_TOOLS = {
     GMAIL: ["search_threads", "get_thread", "get_message", "list_labels", "list_drafts", "get_draft"],
     CALENDAR: ["list_calendars", "list_events", "get_event", "search_events", "suggest_time"],
+    # Read-only account and market data. Never orders: Jarvis doesn't trade.
+    IBKR: [
+        "get_account_summary", "get_account_balances", "get_account_positions", "get_account_orders",
+        "get_account_trades", "get_pa_performance_all_periods", "get_pa_allocation",
+        "get_price_snapshot", "get_price_history", "search_contracts", "get_watchlists", "get_watchlist",
+    ],
 }
 # Actions outside the PC that Jarvis may take, one approved call at a time.
 APPROVAL_TOOLS = {
@@ -54,10 +65,18 @@ BLOCKED_TOOLS = {
         "create_label", "update_label", "delete_label", "download_gmail_attachment",
     ],
     CALENDAR: ["delete_event"],
+    IBKR: [
+        "create_order_instruction", "delete_order_instruction",
+        "create_alert", "update_alert", "delete_alert", "set_alert_status",
+        "create_watchlist", "edit_watchlist", "delete_watchlist",
+        "create_saved_screener", "update_saved_screener", "delete_saved_screener",
+        "provide_customer_feedback",
+    ],
 }
 
 ALLOWED_TOOLS = [_prefix(s) + t for s, tools in READ_TOOLS.items() for t in tools]
-_READ_SET = frozenset(ALLOWED_TOOLS)
+# Reads whose results hold text other people wrote (emails, invites). Broker data isn't that.
+_READ_SET = frozenset(_prefix(s) + t for s in (GMAIL, CALENDAR) for t in READ_TOOLS[s])
 NEEDS_APPROVAL = {_prefix(s) + t for s, tools in APPROVAL_TOOLS.items() for t in tools}
 DISALLOWED_TOOLS = [_prefix(s) + t for s, tools in BLOCKED_TOOLS.items() for t in tools]
 def reads_outside_content(tool_name: str) -> bool:

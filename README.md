@@ -17,7 +17,7 @@ SQLite memory, local voice. Architecture: see the "Jarvis — Production Archite
 Always on: a supervisor keeps the Core and voice service running and restarts them if they
 stop (logs in `%LOCALAPPDATA%\Jarvis\logs`). Install once to start it at every login:
 
-    scripts\install_autostart.cmd              # undo: schtasks /Delete /TN Jarvis /F
+    scripts\install_autostart.cmd    # adds a Startup-folder shortcut; undo: delete it from shell:startup
 
 Then just open http://127.0.0.1:8765. To run the parts by hand instead:
 

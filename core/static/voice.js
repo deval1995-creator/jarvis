@@ -78,7 +78,8 @@
 
   async function connect(newMode) {
     if (newMode) { mode = newMode; localStorage.setItem("voiceMode", mode); }
-    if (pc) disconnect();
+    if (pc) disconnect(true);
+    clearTimeout(retry);
     setState("connecting");
     try {
       mic = await navigator.mediaDevices.getUserMedia({
@@ -107,6 +108,7 @@
       dc.onopen = () => {
         ping = setInterval(() => dc?.readyState === "open" && dc.send("ping: " + Date.now()), 1000);
         setState("idle");
+        lastError = null;
         localStorage.setItem("voiceOn", "1");
       };
       await pc.setLocalDescription(await pc.createOffer());
@@ -123,12 +125,26 @@
       if (!r.ok) throw new Error("voice service refused: " + r.status);
       await pc.setRemoteDescription(await r.json());
     } catch (e) {
-      log("voice: " + (e.name === "TypeError" ? "the voice service isn't running" : e.message));
+      const msg = "voice: " + (e.name === "TypeError" ? "the voice service isn't running; retrying"
+        : e.name === "NotFoundError" ? "no microphone found; connect one and it will retry"
+        : e.name === "NotAllowedError" ? "microphone blocked for this page (allow it in Chrome's site settings)"
+        : e.message);
+      if (msg !== lastError) log(msg);  // once per problem, not on every retry
+      lastError = msg;
       disconnect();
     }
   }
 
-  function disconnect() {
+  // If the link drops while voice is meant to be on (the voice service restarted,
+  // or wasn't up yet), try again every few seconds.
+  let retry = null, lastError = null;
+  function scheduleRetry() {
+    clearTimeout(retry);
+    if (localStorage.getItem("voiceOn") === "1") retry = setTimeout(() => { if (!pc) connect(); }, 4000);
+  }
+
+  function disconnect(byUser = false) {
+    clearTimeout(retry); retry = null;
     clearInterval(ping); ping = null;
     if (held) { held = false; send({ type: "ptt", down: false }); }
     try { dc?.close(); } catch {}
@@ -136,12 +152,13 @@
     mic?.getTracks().forEach((t) => t.stop());  // the mic light goes off
     pc = dc = mic = micAnalyser = null;
     setState("off");
+    if (!byUser) scheduleRetry();
   }
 
   // Mute turns the microphone off completely (not just gated), and remembers it.
   function setMuted(muted) {
     localStorage.setItem("voiceOn", muted ? "0" : "1");
-    if (muted) disconnect(); else connect();
+    if (muted) disconnect(true); else connect();
   }
 
   // Loudness 0..1 of your mic and of Jarvis's voice (for the orb).

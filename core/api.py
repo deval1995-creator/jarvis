@@ -87,6 +87,7 @@ def create_app(
     review_runner: memory_review.Runner | None = None,
     idle_review_seconds: float = 20 * 60,
     idle_check_seconds: float = 60,
+    connectors: bool = True,
 ) -> FastAPI:
     if conn is None:
         conn = db.connect()
@@ -108,13 +109,28 @@ def create_app(
             context=lambda: {
                 "conversation_id": manager.conversation_id,
                 "source": manager.current_source,
-                "untrusted": False,  # becomes per-session once email/web tools exist (Week 2 step 3)
+                "untrusted": manager.untrusted,
             },
             on_proposal=on_proposal,
         )
 
+        async def before_tool(tool_name: str) -> None:
+            # Runs before the tool does, so a memory call later in the same turn
+            # already sees the conversation as untrusted.
+            from core.connectors import reads_outside_content
+
+            if reads_outside_content(tool_name) and not manager.untrusted:
+                manager.mark_untrusted()
+                await hub.broadcast({"type": "untrusted", "conversation_id": manager.conversation_id})
+
         def backend_factory(resume):
-            return SDKBackend(resume, mcp_servers={"memory": memory_server}, allowed_tools=ALLOWED_TOOLS)
+            return SDKBackend(
+                resume,
+                mcp_servers={"memory": memory_server},
+                allowed_tools=ALLOWED_TOOLS,
+                connectors=connectors,
+                before_tool=before_tool,
+            )
 
     manager = SessionManager(conn, backend_factory)
     background_tasks: set[asyncio.Task] = set()
@@ -160,9 +176,23 @@ def create_app(
     allowed_origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
     turn_tasks: set[asyncio.Task] = set()
 
+    async def warm_up() -> None:
+        warm = getattr(manager.backend, "warm", None)
+        if warm is None:
+            return
+        try:
+            status = await warm()
+            if status:
+                log.info("connectors: %s", status)
+        except Exception:
+            log.exception("warm-up failed; the first message will start the session instead")
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         watcher = asyncio.create_task(idle_review_loop())
+        warmer = asyncio.create_task(warm_up())
+        background_tasks.add(warmer)
+        warmer.add_done_callback(background_tasks.discard)
         yield
         watcher.cancel()
         for task in turn_tasks | background_tasks:
@@ -301,7 +331,7 @@ def create_app(
 
     @app.get("/api/status", dependencies=[Depends(require_token)])
     async def get_status() -> dict:
-        return manager.status()
+        return {**manager.status(), "connectors": getattr(manager.backend, "connector_status", None)}
 
     @app.websocket("/ws")
     async def websocket(ws: WebSocket) -> None:

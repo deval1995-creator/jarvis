@@ -8,6 +8,7 @@ SQLite memory, local voice. Architecture: see the "Jarvis — Production Archite
 - `mcp_memory/` — local memory MCP server (Week 2)
 - `voice/` — Pipecat voice pipeline (Week 3)
 - `app/` — Tauri desktop app (Week 4)
+- `jarvis_home/` — Jarvis persona (`CLAUDE.md`), copied to `%LOCALAPPDATA%Jarvishome` on start
 - `scripts/` — one-off tools; `sdk_smoke.py` is the Week 1 go/no-go test
 - `tests/` — pytest
 

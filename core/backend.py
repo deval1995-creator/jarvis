@@ -8,7 +8,8 @@ long-lived ClaudeSDKClient, resumed from a stored session id after a restart.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+import warnings
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -17,15 +18,40 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    HookMatcher,
     ResultMessage,
     StreamEvent,
     TextBlock,
     ToolUseBlock,
 )
 
+from core import db
+
 log = logging.getLogger(__name__)
 
+# Allowed tools skip can_use_tool by design: it is the catch-all that refuses
+# everything *not* allowed. The SDK warns about that; it's intended here.
+warnings.filterwarnings("ignore", message="can_use_tool will not be invoked")
+
 JARVIS_DIR = Path(__file__).resolve().parent.parent
+PERSONA_SOURCE = JARVIS_DIR / "jarvis_home" / "CLAUDE.md"  # edited in the repo
+# Jarvis's Claude Code home: its persona and its own connector choices. It must
+# be outside the git repo, because Claude Code keys per-project settings (like
+# switched-off connectors) by repository root; inside the repo they would also
+# apply to dev sessions in C:\Jarvis.
+AGENT_HOME = db.default_db_path().parent / "home"
+
+
+def prepare_agent_home() -> Path:
+    """Create Jarvis's home and copy the current persona into it."""
+    AGENT_HOME.mkdir(parents=True, exist_ok=True)
+    target = AGENT_HOME / "CLAUDE.md"
+    persona = PERSONA_SOURCE.read_text(encoding="utf-8")
+    if not target.exists() or target.read_text(encoding="utf-8") != persona:
+        target.write_text(persona, encoding="utf-8")
+    return AGENT_HOME
+
+ToolHook = Callable[[str], Awaitable[None]]
 
 
 @dataclass
@@ -48,28 +74,46 @@ class Backend(Protocol):
     async def close(self) -> None: ...
 
 
-def slim_options(
+def session_options(
     resume: str | None = None,
     mcp_servers: dict | None = None,
     allowed_tools: list[str] | None = None,
+    connectors: bool = False,
+    before_tool: ToolHook | None = None,
 ) -> ClaudeAgentOptions:
-    """The everyday chat session: no built-in tools, no claude.ai connectors, only
-    the MCP servers the Core hands it (memory, for now).
+    """The chat session: no built-in tools (files, shell, web), Jarvis's own MCP
+    servers, and optionally the claude.ai connectors (read-only Gmail + Calendar).
 
-    Measured on this PC: ~1k context tokens per turn instead of 20-28k, and first
-    token in ~0.7 s instead of ~1.5 s. Tools get added one at a time.
+    Without connectors a turn reads ~1k context tokens; connectors add their tool
+    definitions to every turn, so the Core switches off all but the two it uses.
     """
-    return ClaudeAgentOptions(
-        cwd=str(JARVIS_DIR),
-        setting_sources=["project"],  # loads CLAUDE.md
+    options = ClaudeAgentOptions(
+        cwd=str(prepare_agent_home()),
+        setting_sources=["project"],  # loads the persona copied from jarvis_home/CLAUDE.md
         tools=[],
         mcp_servers=mcp_servers or {},
-        allowed_tools=allowed_tools or [],  # anything not listed is refused
-        strict_mcp_config=True,
-        env={"ENABLE_CLAUDEAI_MCP_SERVERS": "false"},
+        allowed_tools=list(allowed_tools or []),
         include_partial_messages=True,
         resume=resume,
     )
+    if connectors:
+        from core import connectors as conn_policy
+
+        options.allowed_tools += conn_policy.ALLOWED_TOOLS
+        options.disallowed_tools = list(conn_policy.DISALLOWED_TOOLS)
+        options.can_use_tool = conn_policy.deny_unlisted  # anything not listed is refused
+    else:
+        options.strict_mcp_config = True
+        options.env = {"ENABLE_CLAUDEAI_MCP_SERVERS": "false"}
+        options.can_use_tool = None
+    if before_tool is not None:
+
+        async def pre_tool_use(hook_input, tool_use_id, context):
+            await before_tool(hook_input["tool_name"])
+            return {}
+
+        options.hooks = {"PreToolUse": [HookMatcher(matcher=None, hooks=[pre_tool_use])]}
+    return options
 
 
 class SDKBackend:
@@ -78,14 +122,28 @@ class SDKBackend:
         resume: str | None = None,
         mcp_servers: dict | None = None,
         allowed_tools: list[str] | None = None,
+        connectors: bool = False,
+        before_tool: ToolHook | None = None,
     ):
         self._resume = resume
         self._mcp_servers = mcp_servers
         self._allowed_tools = allowed_tools
+        self._connectors = connectors
+        self._before_tool = before_tool
         self._client: ClaudeSDKClient | None = None
+        self.connector_status: dict[str, str] | None = None
 
     def _options(self, resume: str | None) -> ClaudeAgentOptions:
-        return slim_options(resume, self._mcp_servers, self._allowed_tools)
+        return session_options(resume, self._mcp_servers, self._allowed_tools, self._connectors, self._before_tool)
+
+    async def warm(self) -> dict[str, str] | None:
+        """Start the session ahead of the first message and settle the connectors."""
+        client = await self._ensure_client()
+        if self._connectors:
+            from core import connectors as conn_policy
+
+            self.connector_status = await conn_policy.select_servers(client)
+        return self.connector_status
 
     async def _ensure_client(self) -> ClaudeSDKClient:
         if self._client is None:

@@ -127,6 +127,8 @@ def pending_review(conn, conversation_id: str) -> list:
 
 async def review_conversation(conn, conversation_id: str, runner: Runner) -> ReviewResult:
     result = ReviewResult(conversation_id)
+    flag = conn.execute("select untrusted from conversations where id = ?", (conversation_id,)).fetchone()
+    untrusted = bool(flag and flag["untrusted"])
     rows = pending_review(conn, conversation_id)
     if not rows:
         result.skipped_reason = "nothing new"
@@ -193,6 +195,7 @@ async def review_conversation(conn, conversation_id: str, runner: Runner) -> Rev
                 source="review",
                 conversation_id=conversation_id,
                 origin="review",
+                untrusted=untrusted,
             )
         except memory.MemoryError as e:
             log.warning("review produced an invalid memory %r: %s", text, e)
@@ -221,10 +224,10 @@ async def sdk_runner(system_prompt: str, user_prompt: str) -> tuple[dict, dict |
     """A one-shot background Claude session: no tools, no connectors, no CLAUDE.md."""
     from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
-    from core.backend import JARVIS_DIR
+    from core.backend import prepare_agent_home
 
     options = ClaudeAgentOptions(
-        cwd=str(JARVIS_DIR),
+        cwd=str(prepare_agent_home()),
         system_prompt=system_prompt,
         setting_sources=[],
         tools=[],

@@ -123,6 +123,11 @@ MIGRATIONS: list[str] = [
     """
     alter table conversations add column reviewed_through integer not null default 0;  -- last message id reviewed
     """,
+    # v6: a conversation that has read email or calendar content is untrusted:
+    # memory changes from it (chat or review) wait for Deval's approval.
+    """
+    alter table conversations add column untrusted integer not null default 0;
+    """,
 ]
 
 

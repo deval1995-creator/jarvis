@@ -74,8 +74,8 @@ async def main() -> int:
         print("         Unset it to test the plan sign-in.\n")
 
     options = ClaudeAgentOptions(
-        cwd=str(JARVIS_DIR),
-        setting_sources=["project"],  # loads C:\Jarvis\CLAUDE.md
+        cwd=str(JARVIS_DIR / "jarvis_home"),
+        setting_sources=["project"],  # loads jarvis_home/CLAUDE.md
         allowed_tools=[],  # no tools for the smoke test
         include_partial_messages=True,
         max_turns=1,

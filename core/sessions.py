@@ -47,6 +47,15 @@ class SessionManager:
     def busy(self) -> bool:
         return self._current is not None
 
+    @property
+    def untrusted(self) -> bool:
+        row = self.conn.execute("select untrusted from conversations where id = ?", (self.conversation_id,)).fetchone()
+        return bool(row and row["untrusted"])
+
+    def mark_untrusted(self) -> None:
+        """This conversation has read outside content (email, calendar)."""
+        self.conn.execute("update conversations set untrusted = 1 where id = ?", (self.conversation_id,))
+
     async def interrupt(self) -> bool:
         """Stop the reply in progress, if any. Returns whether there was one."""
         turn = self._current
@@ -149,6 +158,7 @@ class SessionManager:
             "conversation_id": self.conversation_id,
             "claude_session_id": row["claude_session_id"] if row else None,
             "busy": self.busy,
+            "untrusted": self.untrusted,
             "last_turn": self.last_turn,
             "usage_today_utc": store.usage_since(self.conn, today.isoformat(timespec="milliseconds")),
         }

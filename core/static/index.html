@@ -68,7 +68,7 @@
   /* centre */
   #centre { grid-column: 2; grid-row: 2; position: relative; display: flex; flex-direction: column; align-items: center;
             justify-content: center; min-height: 0; }
-  #orb { width: min(100%, 62vh); aspect-ratio: 1; }
+  #orb { width: min(100%, 66vh); aspect-ratio: 1; }
   #vlabel { position: absolute; top: 4px; left: 0; font-size: 11px; letter-spacing: .25em; color: var(--muted); }
   #subs { width: min(100%, 760px); text-align: center; min-height: 76px; }
   #subs .you { color: var(--muted); font-size: 12px; letter-spacing: .04em; }
@@ -206,6 +206,7 @@
 <div id="modal"></div>
 
 <script src="/static/voice.js"></script>
+<script src="/static/orb.js"></script>
 <script>
 const TOKEN = "__JARVIS_TOKEN__";
 const headers = { "X-Jarvis-Token": TOKEN, "Content-Type": "application/json" };
@@ -420,57 +421,21 @@ function drawGauge() {
 }
 
 // ---------- the orb ----------
-const orb = $("orb"), og = orb.getContext("2d");
-const POINTS = Array.from({ length: 700 }, (_, i) => {  // evenly spread over a sphere
-  const y = 1 - (i / 699) * 2, rr = Math.sqrt(1 - y * y), th = i * Math.PI * (3 - Math.sqrt(5));
-  return [Math.cos(th) * rr, y, Math.sin(th) * rr];
+// ?demo=listening|thinking|speaking shows a state with a made-up voice (for previews).
+const DEMO = new URLSearchParams(location.search).get("demo");
+const demoBins = new Uint8Array(256);
+new JarvisOrb($("orb"), () => {
+  const v = window.jarvisVoice;
+  if (DEMO) {
+    const t = performance.now() / 1000, lvl = 0.35 + 0.3 * Math.abs(Math.sin(t * 3.1) * Math.sin(t * 1.7));
+    for (let i = 0; i < 256; i++) demoBins[i] = Math.max(0, 230 * lvl * Math.exp(-i / 45) * (0.6 + 0.4 * Math.sin(t * 9 + i * 0.7)));
+    return { state: DEMO, mic: lvl, out: lvl, spectrum: demoBins };
+  }
+  const lv = v.levels(), spec = v.spectrum();
+  let state = v.state;
+  if (state === "off" && status?.busy) state = "thinking";  // typed turns animate too
+  return { state, mic: lv.mic, out: lv.out, spectrum: state === "listening" ? spec.mic : spec.out };
 });
-let spin = 0, ringA = 0, ringB = 0, energy = 0;
-function frame() {
-  const dpr = devicePixelRatio || 1, W = orb.clientWidth;
-  if (W && orb.width !== Math.round(W * dpr)) { orb.width = orb.height = Math.round(W * dpr); }
-  const g = og; g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, W);
-  const v = window.jarvisVoice, st = v.state, lv = v.levels();
-  const thinking = st === "thinking" || (status?.busy && st !== "speaking");
-  const target = st === "speaking" ? lv.out : st === "listening" ? lv.mic : thinking ? .25 : .05;
-  energy += (target - energy) * .2;
-  spin += thinking ? .018 : .004 + energy * .02;
-  ringA += thinking ? .02 : .003; ringB -= thinking ? .012 : .002;
-  const c = W / 2, R = W * .40;
-  const hue = thinking ? "255,181,71" : st === "listening" ? "170,230,255" : "92,200,255";
-
-  const grd = g.createRadialGradient(c, c, R * .1, c, c, R * 1.1);  // glow
-  grd.addColorStop(0, `rgba(${hue},${.18 + energy * .35})`); grd.addColorStop(1, "rgba(0,0,0,0)");
-  g.fillStyle = grd; g.beginPath(); g.arc(c, c, R * 1.1, 0, Math.PI * 2); g.fill();
-
-  g.save(); g.translate(c, c); g.rotate(ringA);  // outer tick ring
-  for (let i = 0; i < 120; i++) {
-    const a = (i / 120) * Math.PI * 2, long = i % 10 === 0;
-    g.strokeStyle = `rgba(${hue},${long ? .9 : .35})`; g.lineWidth = long ? 2 : 1;
-    g.beginPath(); g.moveTo(Math.cos(a) * R, Math.sin(a) * R);
-    g.lineTo(Math.cos(a) * (R - (long ? 12 : 6)), Math.sin(a) * (R - (long ? 12 : 6))); g.stroke();
-  }
-  g.restore();
-  g.save(); g.translate(c, c); g.rotate(ringB);  // segmented arcs
-  g.strokeStyle = `rgba(${hue},.75)`; g.lineWidth = 3; g.shadowColor = `rgb(${hue})`; g.shadowBlur = 10;
-  for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; g.beginPath(); g.arc(0, 0, R * .88, a, a + .7); g.stroke(); }
-  g.shadowBlur = 0; g.restore();
-  g.strokeStyle = `rgba(${hue},.3)`; g.lineWidth = 1;  // thin inner rings
-  for (const k of [.78, .74]) { g.beginPath(); g.arc(c, c, R * k, 0, Math.PI * 2); g.stroke(); }
-
-  const sr = R * (.62 + energy * .12), cs = Math.cos(spin), sn = Math.sin(spin), tilt = .35;  // particle sphere
-  for (const [x, y, z] of POINTS) {
-    const x1 = x * cs - z * sn, z1 = x * sn + z * cs;
-    const y2 = y * Math.cos(tilt) - z1 * Math.sin(tilt), z2 = y * Math.sin(tilt) + z1 * Math.cos(tilt);
-    const jitter = 1 + energy * .08 * Math.sin(x * 9 + spin * 6);
-    const px = c + x1 * sr * jitter, py = c + y2 * sr * jitter, depth = (z2 + 1) / 2;
-    g.fillStyle = `rgba(${hue},${.15 + depth * .75})`;
-    g.fillRect(px, py, 1 + depth * 1.4, 1 + depth * 1.4);
-  }
-  g.fillStyle = `rgba(${hue},${.5 + energy * .5})`; g.shadowColor = `rgb(${hue})`; g.shadowBlur = 20;  // core
-  g.beginPath(); g.arc(c, c, 3 + energy * 6, 0, Math.PI * 2); g.fill(); g.shadowBlur = 0;
-  requestAnimationFrame(frame);
-}
 
 // ---------- clock ----------
 function tick() {
@@ -613,7 +578,6 @@ window.jarvis = {
 
 setInterval(loadStatus, 30000);
 renderSystems(); renderNumbers();
-requestAnimationFrame(frame);
 connect();
 </script>
 </body>

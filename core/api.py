@@ -269,9 +269,13 @@ def create_app(
         """The small ask box the desktop app's hotkey opens."""
         return page("quick.html")
 
-    @app.get("/static/voice.js")
-    async def voice_js() -> Response:
-        return Response((STATIC_DIR / "voice.js").read_text(encoding="utf-8"), media_type="text/javascript")
+    SCRIPTS = {"voice.js", "orb.js"}
+
+    @app.get("/static/{name}")
+    async def script(name: str) -> Response:
+        if name not in SCRIPTS:
+            raise HTTPException(status_code=404)
+        return Response((STATIC_DIR / name).read_text(encoding="utf-8"), media_type="text/javascript")
 
     @app.post("/api/message", dependencies=[Depends(require_token)])
     async def process_message(body: MessageIn) -> dict:

@@ -154,7 +154,16 @@
     return Math.min(1, Math.sqrt(sum / buf.length) * 6);
   }
 
+  // Frequency bins 0..255 of your mic and of Jarvis's voice (for the orb's voice ring).
+  const micBins = new Uint8Array(256), outBins = new Uint8Array(256);
+  function spectrum() {
+    if (micAnalyser && (held || mode === "hands-free")) micAnalyser.getByteFrequencyData(micBins); else micBins.fill(0);
+    if (analyser) analyser.getByteFrequencyData(outBins); else outBins.fill(0);
+    return { mic: micBins, out: outBins };
+  }
+
   window.jarvisVoice = {
+    spectrum,
     levels: () => ({ mic: held || mode === "hands-free" ? level(micAnalyser) : 0, out: level(analyser) }),
     connect, disconnect, ptt, setMuted,
     toggleMute: () => setMuted(micState() !== "off"),

@@ -16,7 +16,7 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 from core import memory
 
 SERVER_NAME = "memory"
-TOOL_NAMES = ["get_profile", "recall", "remember", "update", "forget", "log"]
+TOOL_NAMES = ["get_profile", "recall", "network", "remember", "update", "forget", "log"]
 ALLOWED_TOOLS = [f"mcp__{SERVER_NAME}__{n}" for n in TOOL_NAMES]
 
 OnProposal = Callable[[dict], Awaitable[None]]
@@ -95,6 +95,24 @@ def build_memory_server(
         return _ok({"memories": results} if results else {"memories": [], "note": "Nothing saved matches."})
 
     @tool(
+        "network",
+        "What you know about Deval as a graph: memories linked to the people they involve and to their "
+        "topics. Use it when Deval asks how things connect, what you know about a person or topic, or to "
+        "see the memory network. Optional filters narrow it. Show it with show_window's graph.",
+        {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Optional search words"},
+                "category": {"type": "string", "description": "Optional topic, e.g. work, education, family"},
+                "person": {"type": "string", "description": "Optional: only memories about this person"},
+            },
+        },
+    )
+    async def network(args):
+        return _ok(memory.network(conn, query=args.get("query"), category=args.get("category"),
+                                  person=args.get("person")))
+
+    @tool(
         "remember",
         "Save a new long-term memory. Most are saved at once; sensitive ones wait for Deval's approval. "
         "Write the text as a standalone fact, e.g. \"Deval prefers morning meetings.\" Set confidence below 1 "
@@ -165,6 +183,6 @@ def build_memory_server(
     async def log(args):
         return await _propose("remember", text=args["text"], kind="journal", category=args.get("category"), importance=2)
 
-    tools = [get_profile, recall, remember, update, forget, log]
+    tools = [get_profile, recall, network, remember, update, forget, log]
     assert [t.name for t in tools] == TOOL_NAMES
     return create_sdk_mcp_server(name=SERVER_NAME, version="1.0.0", tools=tools)

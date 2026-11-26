@@ -272,7 +272,7 @@ def create_app(
     async def index() -> str:
         return page("index.html")
 
-    SCRIPTS = {"voice.js", "orb.js"}
+    SCRIPTS = {"voice.js", "orb.js", "graph.js"}
 
     @app.get("/static/{name}")
     async def script(name: str) -> Response:

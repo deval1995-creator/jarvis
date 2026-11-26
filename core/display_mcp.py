@@ -26,6 +26,7 @@ ALLOWED_TOOLS = [f"mcp__{SERVER_NAME}__{n}" for n in TOOL_NAMES]
 
 MAX_WINDOWS = 6
 MAX_ROWS, MAX_COLS, MAX_ITEMS, MAX_STATS, MAX_TEXT = 200, 12, 100, 8, 600
+MAX_NODES, MAX_EDGES = 150, 400
 TONES = {"up", "down", "warn", "neutral"}
 
 OnChange = Callable[[dict], Awaitable[None]]
@@ -54,6 +55,24 @@ SHOW_SCHEMA = {
             "items": {"type": "object", "properties": {
                 "when": {"type": "string"}, "title": {"type": "string"}, "detail": {"type": "string"},
             }, "required": ["title"]},
+        },
+        "text": {"type": "string", "description": "Plain-text explanation (a few short paragraphs, no markdown)."},
+        "graph": {
+            "type": "object",
+            "description": "A network of linked things, drawn as an interactive graph: memories and the people "
+                           "and topics they connect, relationships, dependencies, how ideas relate.",
+            "properties": {
+                "nodes": {"type": "array", "items": {"type": "object", "properties": {
+                    "id": {"type": "string"}, "label": {"type": "string"},
+                    "group": {"type": "string", "description": "Colours nodes, e.g. person, topic, memory"},
+                    "detail": {"type": "string", "description": "Shown when hovered"},
+                    "size": {"type": "number", "description": "1 (small) to 5 (large)"},
+                }, "required": ["id", "label"]}},
+                "edges": {"type": "array", "items": {"type": "object", "properties": {
+                    "from": {"type": "string"}, "to": {"type": "string"}, "label": {"type": "string"},
+                }, "required": ["from", "to"]}},
+            },
+            "required": ["nodes"],
         },
         "note": {"type": "string", "description": "One line at the bottom: source, caveats, data time."},
         "replace": {"type": "string", "description": "Id of an open window to update instead of opening a new one."},
@@ -91,6 +110,26 @@ def clean_window(args: dict) -> dict:
     if items:
         win["items"] = [{"when": _text(i.get("when"), 60), "title": _text(i.get("title"), 160),
                          "detail": _text(i.get("detail"), 300)} for i in items]
+    if args.get("text"):
+        win["text"] = _text(args["text"], 3000)
+    graph = args.get("graph")
+    if isinstance(graph, dict) and graph.get("nodes"):
+        nodes, seen = [], set()
+        for n in graph["nodes"][:MAX_NODES]:
+            if not isinstance(n, dict) or not n.get("id"):
+                continue
+            nid = _text(n["id"], 80)
+            if nid in seen:
+                continue
+            seen.add(nid)
+            size = n.get("size")
+            nodes.append({"id": nid, "label": _text(n.get("label") or nid, 120), "group": _text(n.get("group"), 30),
+                          "detail": _text(n.get("detail"), 400),
+                          "size": max(1, min(5, int(size))) if isinstance(size, (int, float)) else 2})
+        edges = [{"from": _text(e["from"], 80), "to": _text(e["to"], 80), "label": _text(e.get("label"), 40)}
+                 for e in (graph.get("edges") or [])[:MAX_EDGES]
+                 if isinstance(e, dict) and e.get("from") in seen and e.get("to") in seen]
+        win["graph"] = {"nodes": nodes, "edges": edges}
     if args.get("note"):
         win["note"] = _text(args["note"], 300)
     return win
@@ -136,9 +175,11 @@ def _ok(text: str) -> dict:
 
 
 def build_display_server(board: WindowBoard):
-    @tool("show_window", "Open (or update) a window on Deval's screen showing structured data: "
-          "portfolio, calendar, lists, comparisons. Fetch the data first; put numbers in stats/table, "
-          "events in items. Then reply with one short spoken sentence, not the window's contents.",
+    @tool("show_window", "Open (or update) a window on Deval's screen. Choose the form that answers the "
+          "question best, and combine them when useful: stats (headline numbers), table (comparisons, "
+          "positions), items (timelines, schedules), graph (how things connect: people, topics, memories), "
+          "text (explanation). Fetch the data first. Then reply with one short spoken sentence, not the "
+          "window's contents.",
           SHOW_SCHEMA)
     async def show_window(args: dict) -> dict:
         win = await board.show(args)

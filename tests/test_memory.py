@@ -208,3 +208,20 @@ def test_critical_changes_wait(conn):
     assert memory.recall(conn, "CFA")[0]["id"] == important
     assert len(memory.list_proposals(conn)) == 4
 
+
+
+def test_network_links_memories_to_people_and_topics(tmp_path):
+    from core import db, memory
+
+    conn = db.connect(tmp_path / "n.db")
+    for text, cat, people in [("Deval's wife is Sam.", "family", ["Sam"]), ("Deval lives in Whitby.", "home", ["Deval"]),
+                              ("Deval's blood type is O+.", "health", ["Deval"])]:
+        p = memory.propose(conn, "remember", text=text, category=cat, people=people)
+        if p["status"] == "pending":
+            memory.approve(conn, p["id"])
+    net = memory.network(conn)
+    labels = {n["label"] for n in net["nodes"]}
+    assert {"Sam", "Deval", "family", "home"} <= labels
+    assert "health" not in labels and not any("blood" in l for l in labels)  # local-only stays on the PC
+    assert net["counts"] == {"memories": 2, "people": 2, "topics": 2}
+    assert len(memory.network(conn, person="Sam")["nodes"]) == 3

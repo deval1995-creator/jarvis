@@ -399,3 +399,65 @@ def edit_memory(conn: sqlite3.Connection, memory_id: int, **fields) -> dict:
 def archive_memory(conn: sqlite3.Connection, memory_id: int) -> None:
     _get_memory(conn, memory_id)
     _archive(conn, memory_id)
+
+
+def network(
+    conn: sqlite3.Connection,
+    *,
+    query: str | None = None,
+    category: str | None = None,
+    person: str | None = None,
+    limit: int = 150,
+) -> dict:
+    """What Jarvis knows, as a graph: memories linked to the people they involve
+    and to their topic (category). Local-only categories are left out, since the
+    result goes to Claude.
+
+    Filters narrow which memories are included (search words, a category, a
+    person); their people and topics come with them.
+    """
+    hidden = set(local_only_categories(conn))
+    if query:
+        rows = [r for r in recall(conn, query, limit=limit)]
+        ids = [r["id"] for r in rows]
+        mems = [dict(r) for r in conn.execute(
+            f"select * from memories where id in ({','.join('?' * len(ids))})", ids).fetchall()] if ids else []
+    else:
+        mems = [dict(r) for r in conn.execute(
+            "select * from memories where archived = 0 order by importance desc, created_at desc limit ?",
+            (limit * 3,)).fetchall()]
+    links = conn.execute(
+        "select mp.memory_id, p.name from memory_people mp join people p on p.id = mp.person_id").fetchall()
+    people_of: dict[int, list[str]] = {}
+    for mid, name in links:
+        people_of.setdefault(mid, []).append(name)
+
+    out_nodes: dict[str, dict] = {}
+    edges: list[dict] = []
+    kept = 0
+    for m in mems:
+        cat = (m.get("category") or "").lower()
+        if cat in hidden or m.get("archived"):
+            continue
+        if category and cat != category.lower():
+            continue
+        names = people_of.get(m["id"], [])
+        if person and person.lower() not in {n.lower() for n in names}:
+            continue
+        if kept >= limit:
+            break
+        kept += 1
+        mid = f"m{m['id']}"
+        out_nodes[mid] = {"id": mid, "type": "memory", "label": m["text"], "kind": m["kind"],
+                          "category": cat or None, "importance": m["importance"], "memory_id": m["id"]}
+        for n in names:
+            pid = f"p:{n}"
+            out_nodes.setdefault(pid, {"id": pid, "type": "person", "label": n})
+            edges.append({"from": mid, "to": pid, "label": "about"})
+        if cat:
+            cid = f"c:{cat}"
+            out_nodes.setdefault(cid, {"id": cid, "type": "topic", "label": cat})
+            edges.append({"from": mid, "to": cid, "label": "topic"})
+    return {"nodes": list(out_nodes.values()), "edges": edges,
+            "counts": {"memories": kept, "people": sum(1 for n in out_nodes.values() if n["type"] == "person"),
+                       "topics": sum(1 for n in out_nodes.values() if n["type"] == "topic")}}

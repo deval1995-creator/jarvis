@@ -8,13 +8,24 @@ SQLite memory, local voice. Architecture: see the "Jarvis — Production Archite
   `memory_review.py`), connector policy (`connectors.py`)
 - `voice/` — voice service: Pipecat pipeline (`pipeline.py`, `bot.py`), speech models
   (`models.py`), test page (`static/`)
-- `app/` — Tauri desktop app (Week 4)
+- `app/` — desktop app (Tauri): window, tray, hotkeys, pop-ups; starts the Core and voice
 - `jarvis_home/` — Jarvis persona (`CLAUDE.md`), copied to `%LOCALAPPDATA%\Jarvis\home` on start
 - `scripts/` — one-off tools; `sdk_smoke.py` is the Week 1 go/no-go test, `voice_e2e.py`
   talks to the voice service with generated speech (no microphone)
 - `tests/` — pytest
 
 ## Run
+Desktop app (starts the Core and voice service itself; logs in `%LOCALAPPDATA%\Jarvis\logs`):
+
+    cd app && npm install && npx tauri build --no-bundle   # once; needs Rust
+    app\src-tauri	arget
+    app\src-tauri\target\release\jarvis.exe
+
+Hotkeys: hold **F9** to talk, **Ctrl+Shift+Space** quick-ask box, **Ctrl+Shift+M** mic on/off.
+Closing the window keeps Jarvis in the tray; Quit is in the tray menu.
+
+Or run the parts from a terminal:
+
     uv run python -m core                         # then open http://127.0.0.1:8765
     uv run python -m voice                                 # voice test page: http://127.0.0.1:8766
 

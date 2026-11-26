@@ -1,0 +1,14 @@
+{
+  "name": "jarvis-app",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Jarvis desktop app (Tauri shell around the Core's pages)",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "icon": "tauri icon src-tauri/icons/source.png"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

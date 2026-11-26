@@ -14,6 +14,13 @@ SQLite memory, local voice. Architecture: see the "Jarvis — Production Archite
 - `tests/` — pytest
 
 ## Run
+Always on: a supervisor keeps the Core and voice service running and restarts them if they
+stop (logs in `%LOCALAPPDATA%\Jarvis\logs`). Install once to start it at every login:
+
+    scripts\install_autostart.cmd              # undo: schtasks /Delete /TN Jarvis /F
+
+Then just open http://127.0.0.1:8765. To run the parts by hand instead:
+
     uv run python -m core                         # then open http://127.0.0.1:8765
     uv run python -m voice                        # voice; use the mic controls on the chat page
 

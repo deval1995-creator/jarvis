@@ -391,6 +391,7 @@ function renderSystems() {
   row(box, "CLAUDE", status?.busy ? "WORKING" : status ? "READY" : "—", status?.busy ? "warn" : status ? "ok" : "off");
   row(box, "GMAIL", ...cs("claude.ai Gmail"));
   row(box, "CALENDAR", ...cs("claude.ai Google Calendar"));
+  row(box, "IBKR", ...cs("claude.ai Interactive Brokers (IBKR)"));
   row(box, "MEMORY", memCount + " SAVED", "ok");
   const m = window.jarvisVoice.micState;
   row(box, "VOICE", m === "off" ? "OFF" : m === "ptt" ? "PUSH-TO-TALK" : "HANDS-FREE", m === "off" ? "off" : "ok");

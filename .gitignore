@@ -8,3 +8,6 @@ __pycache__/
 *.db-shm
 .claude/settings.local.json
 *.wav
+node_modules/
+app/src-tauri/target/
+app/src-tauri/gen/

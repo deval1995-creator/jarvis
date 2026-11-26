@@ -242,3 +242,31 @@ def test_core_llm_through_real_core(server):  # noqa: F811
 def test_core_client_rejects_bad_token(server):  # noqa: F811
     with pytest.raises(Exception):
         asyncio.run(CoreClient(f"ws://127.0.0.1:{server}/ws", "wrong").connect())
+
+
+# ----- the voice service's HTTP surface (no models, no WebRTC) -----
+
+
+def voice_client():
+    from fastapi.testclient import TestClient
+
+    from voice.server import create_app
+
+    return TestClient(create_app(preload=False), base_url="http://127.0.0.1:8766")
+
+
+def test_chat_page_may_call_the_voice_service():
+    with voice_client() as c:
+        r = c.options("/api/offer", headers={"Origin": "http://127.0.0.1:8765",
+                                             "Access-Control-Request-Method": "POST",
+                                             "Access-Control-Request-Headers": "content-type"})
+        assert r.status_code == 200
+        assert r.headers["access-control-allow-origin"] == "http://127.0.0.1:8765"
+
+
+def test_other_sites_may_not():
+    with voice_client() as c:
+        r = c.post("/api/offer", json={"sdp": "x", "type": "offer"}, headers={"Origin": "https://evil.example"})
+        assert r.status_code == 403
+        r = c.options("/api/offer", headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"})
+        assert "access-control-allow-origin" not in r.headers

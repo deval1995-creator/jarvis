@@ -19,6 +19,7 @@ from voice import cuda
 cuda.add_dll_directories()  # before faster-whisper / ctranslate2 load
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import HTMLResponse  # noqa: E402
 from starlette.middleware.trustedhost import TrustedHostMiddleware  # noqa: E402
 
@@ -31,6 +32,7 @@ log = logging.getLogger(__name__)
 
 STATIC = Path(__file__).parent / "static"
 CORE_URL = os.environ.get("JARVIS_CORE_WS", "ws://127.0.0.1:8765/ws")
+CORE_PAGE_ORIGINS = ("http://127.0.0.1:8765", "http://localhost:8765")
 
 
 def create_app(port: int = 8766, core_url: str = CORE_URL, preload: bool = True) -> FastAPI:
@@ -44,7 +46,8 @@ def create_app(port: int = 8766, core_url: str = CORE_URL, preload: bool = True)
     from voice.bot import build_task
 
     handler = SmallWebRTCRequestHandler()
-    allowed_origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
+    # Its own test page, and the Core's chat page (which the desktop app shows).
+    allowed_origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}", *CORE_PAGE_ORIGINS}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -55,6 +58,13 @@ def create_app(port: int = 8766, core_url: str = CORE_URL, preload: bool = True)
 
     app = FastAPI(title="Jarvis voice", lifespan=lifespan)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
+    # The chat page calls /api/offer from another port, so it needs CORS; no other site does.
+    app.add_middleware(CORSMiddleware, allow_origins=list(CORE_PAGE_ORIGINS), allow_methods=["POST"],
+                       allow_headers=["Content-Type"])
+
+    @app.get("/api/health")
+    async def health() -> dict:
+        return {"ok": True}
 
     def check_origin(request: Request) -> None:
         origin = request.headers.get("origin")

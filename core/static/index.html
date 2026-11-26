@@ -56,12 +56,31 @@
   .approval .actions { display: flex; gap: 8px; margin-top: 10px; }
   .approval.decided { border-color: var(--line); opacity: .75; }
   .approval .outcome { font-weight: 600; margin-top: 8px; }
+  .voice { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .voice select { font: inherit; font-size: 13px; padding: 4px 6px; border-radius: 8px; border: 1px solid var(--line);
+                  background: transparent; color: inherit; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.idle { background: #16a34a; } .dot.listening { background: var(--accent); }
+  .dot.thinking { background: var(--warn); animation: pulse 1s infinite; } .dot.speaking { background: #a855f7; }
+  .dot.off { background: transparent; border: 1px solid var(--muted); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  #talk.held { background: var(--accent); border-color: var(--accent); color: white; }
+  #talk { user-select: none; touch-action: none; }
 </style>
 </head>
 <body>
 <header>
   <h1>Jarvis</h1><span id="conn">connecting…</span>
   <span class="spacer"></span>
+  <span class="voice">
+    <span class="dot off" id="vdot"></span><span id="vstate">Mic off</span>
+    <select id="vmode" title="Microphone">
+      <option value="off">Mic off</option>
+      <option value="ptt">Push-to-talk</option>
+      <option value="hands-free">Hands-free</option>
+    </select>
+    <button id="talk" type="button" disabled title="Hold to talk (or hold Space when not typing)">Hold to talk</button>
+  </span>
   <button id="newchat" type="button">New conversation</button>
 </header>
 <main>
@@ -81,6 +100,7 @@
   <input type="search" id="memq" placeholder="Search memories">
   <div id="memories"></div>
 </aside>
+<script src="/static/voice.js"></script>
 <script>
 const TOKEN = "__JARVIS_TOKEN__";
 const headers = { "X-Jarvis-Token": TOKEN, "Content-Type": "application/json" };
@@ -251,6 +271,8 @@ function connect() {
       loadHistory().then(loadApprovals); loadInbox(); loadMemories();
     }
     else if (ev.type === "approval_request") {
+      host.notify("Jarvis needs your approval", (ACTION_TITLES[ev.approval.tool.replace(/^mcp__\w+?__/, "")]
+        || "An action is waiting") + " Open Jarvis to approve or reject.");
       const card = approvalCard(ev.approval);
       if (current) log.insertBefore(card, current); else log.append(card);
       log.scrollTop = log.scrollHeight;
@@ -270,6 +292,8 @@ function connect() {
       loadInbox(); loadMemories();
     }
     else if (["done", "interrupted", "error"].includes(ev.type) && "total_ms" in ev) {
+      if (ev.type === "done" && document.hidden && current && ev.source !== "voice")
+        host.notify("Jarvis", current.textContent.slice(0, 180));
       if (current) {
         if (ev.type === "interrupted") current.classList.add("cut");
         if (ev.type === "error") { current.classList.add("err"); current.textContent += (current.textContent ? "\n" : "") + "Error: " + ev.error; }
@@ -296,6 +320,57 @@ const stop = () => ws.send(JSON.stringify({ type: "interrupt" }));
 $("stop").onclick = stop;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") stop(); });
 $("newchat").onclick = () => api("/api/conversations/new", { method: "POST" });
+
+// ---------- the desktop app (Tauri), when this page runs inside it ----------
+const tauri = window.__TAURI__;
+const host = {
+  notify(title, body) {
+    if (!document.hidden && document.hasFocus()) return;  // already looking at it
+    if (tauri) tauri.core.invoke("notify", { title, body }).catch(() => {});
+    else if (window.Notification && Notification.permission === "granted") new Notification(title, { body });
+  },
+  mic(state) { if (tauri) tauri.core.invoke("mic_state", { state }).catch(() => {}); },
+};
+
+// ---------- voice ----------
+const voice = window.jarvisVoice;
+const VSTATES = { off: "Mic off", connecting: "Connecting…", idle: "Ready", listening: "Listening",
+                  thinking: "Thinking", speaking: "Speaking" };
+const lastVoice = {};
+voice.on("state", (s) => {
+  $("vdot").className = "dot " + s;
+  $("vstate").textContent = VSTATES[s] || s;
+  $("talk").disabled = !(voice.micState === "ptt");
+});
+voice.on("mic", (m) => { $("vmode").value = m === "off" && voice.state === "connecting" ? voice.mode : m; host.mic(m); });
+voice.on("timings", (t) => {
+  if ("interrupt_stop" in t || "heard_stop" in t) {
+    if ("heard_stop" in t) lastVoice.interrupt = t.heard_stop;
+  } else Object.assign(lastVoice, t, { interrupt: undefined });
+  const ms = (v) => (v === undefined ? "–" : v);
+  stats.textContent = `voice: heard ${ms(lastVoice.transcribe)} ms · first audio ${ms(lastVoice.first_audio)} ms`
+    + ` · reply ${ms(lastVoice.total)} ms` + (lastVoice.interrupt !== undefined ? ` · interruption stopped in ${lastVoice.interrupt} ms` : "");
+});
+voice.on("log", (text) => { if (!text.startsWith("heard:")) { const n = el("div", "toolnote err", "· " + text); log.append(n); } });
+$("vmode").onchange = (e) => (e.target.value === "off" ? voice.setMuted(true) : voice.connect(e.target.value));
+const talk = $("talk");
+talk.addEventListener("pointerdown", (e) => { talk.setPointerCapture(e.pointerId); voice.ptt(true); talk.classList.add("held"); });
+const release = () => { voice.ptt(false); talk.classList.remove("held"); };
+talk.addEventListener("pointerup", release);
+talk.addEventListener("pointercancel", release);
+const typing = (e) => ["TEXTAREA", "INPUT", "SELECT"].includes(e.target.tagName);
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Space" && !e.repeat && !typing(e) && voice.micState === "ptt") { e.preventDefault(); voice.ptt(true); talk.classList.add("held"); }
+});
+document.addEventListener("keyup", (e) => { if (e.code === "Space" && !typing(e)) release(); });
+window.addEventListener("blur", release);
+if (voice.wantsOn && localStorage.getItem("voiceMode")) voice.connect();
+// The desktop app's hotkeys and tray call these.
+window.jarvis = {
+  ptt: (down) => { voice.ptt(down); talk.classList.toggle("held", down); },
+  toggleMute: () => voice.toggleMute(),
+  focusInput: () => input.focus(),
+};
 connect();
 </script>
 </body>

@@ -121,3 +121,12 @@ def test_idle_conversation_gets_reviewed(tmp_path):
         saved = c.get("/api/memory", headers=AUTH).json()
         assert [m["text"] for m in saved] == ["Deval's sister Priya lives in Pune."]
     conn.close()
+
+
+def test_quick_ask_page_and_voice_script(client):
+    page = client.get("/quick")
+    assert page.status_code == 200 and "Ask Jarvis" in page.text and "__JARVIS_TOKEN__" not in page.text
+    js = client.get("/static/voice.js")
+    assert js.status_code == 200 and "jarvisVoice" in js.text
+    assert js.headers["content-type"].startswith("text/javascript")
+    assert '<script src="/static/voice.js">' in client.get("/").text

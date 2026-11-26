@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -254,12 +254,24 @@ def create_app(
             final = event
         return final
 
-    @app.get("/", response_class=HTMLResponse)
-    async def index() -> str:
+    def page(name: str) -> str:
         # The page carries the token. Other websites can't read this response
         # (no CORS headers) and can't reach it by DNS rebinding (Host check).
-        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        html = (STATIC_DIR / name).read_text(encoding="utf-8")
         return html.replace("__JARVIS_TOKEN__", json.dumps(token)[1:-1])
+
+    @app.get("/", response_class=HTMLResponse)
+    async def index() -> str:
+        return page("index.html")
+
+    @app.get("/quick", response_class=HTMLResponse)
+    async def quick() -> str:
+        """The small ask box the desktop app's hotkey opens."""
+        return page("quick.html")
+
+    @app.get("/static/voice.js")
+    async def voice_js() -> Response:
+        return Response((STATIC_DIR / "voice.js").read_text(encoding="utf-8"), media_type="text/javascript")
 
     @app.post("/api/message", dependencies=[Depends(require_token)])
     async def process_message(body: MessageIn) -> dict:

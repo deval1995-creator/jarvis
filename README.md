@@ -14,10 +14,13 @@ SQLite memory, local voice. Architecture: see the "Jarvis — Production Archite
 - `tests/` — pytest
 
 ## Run
-Always on: a supervisor keeps the Core and voice service running and restarts them if they
-stop (logs in `%LOCALAPPDATA%\Jarvis\logs`). Install once to start it at every login:
+Always on: a supervisor keeps the Core and voice service running. It restarts a service that
+stops, and one that stops answering (checked every 30 s). A Windows task checks every 30 s that
+the supervisor itself is running and starts it if not. Logs: `%LOCALAPPDATA%\Jarvis\logs`.
+Install once (no admin needed):
 
-    scripts\install_autostart.cmd    # adds a Startup-folder shortcut; undo: delete it from shell:startup
+    powershell -File scripts\install_watchdog.ps1   # every 30 s; undo: Unregister-ScheduledTask "Jarvis watchdog"
+    scripts\install_autostart.cmd                   # also at login; undo: delete it from shell:startup
 
 Then just open http://127.0.0.1:8765. To run the parts by hand instead:
 

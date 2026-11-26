@@ -24,6 +24,13 @@ log = logging.getLogger(__name__)
 WHISPER_MODEL = os.environ.get("JARVIS_WHISPER_MODEL", Model.LARGE_V3_TURBO.value)
 WHISPER_DEVICE = os.environ.get("JARVIS_WHISPER_DEVICE", "cuda")
 WHISPER_COMPUTE = os.environ.get("JARVIS_WHISPER_COMPUTE", "float16" if WHISPER_DEVICE == "cuda" else "int8")
+# Context Whisper reads before each segment, so it knows the names it will hear
+# ("Are you Jarvis?" came out as "Are you nervous?" without it). Safe to use
+# because silent key presses never reach Whisper.
+WHISPER_PROMPT = os.environ.get("JARVIS_WHISPER_PROMPT", "Deval talking to Jarvis, an AI assistant.")
+# JARVIS_SAVE_SPEECH=1 keeps each segment Whisper hears as a WAV in the data
+# folder (speech_debug), to tell bad audio from bad recognition. Off by default.
+SAVE_SPEECH = os.environ.get("JARVIS_SAVE_SPEECH") == "1"
 VOICE = os.environ.get("JARVIS_VOICE", "bm_george")
 TTS_DEVICE = os.environ.get("JARVIS_TTS_DEVICE", "cuda")
 
@@ -63,12 +70,35 @@ class SharedWhisperSTTService(WhisperSTTService):
             self._model = _whisper[key]
 
 
+    async def run_stt(self, audio: bytes):
+        if SAVE_SPEECH:
+            _save_segment(audio, self.segment_sample_rate)
+        async for frame in super().run_stt(audio):
+            yield frame
+
+
+def _save_segment(pcm: bytes, rate: int) -> None:
+    import time
+    import wave
+
+    from core import db
+
+    folder = db.default_db_path().parent / "speech_debug"
+    folder.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(folder / f"{time.strftime('%Y%m%d-%H%M%S')}.wav"), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    log.info("saved speech segment to %s", folder)
+
+
 def make_stt() -> SharedWhisperSTTService:
     return SharedWhisperSTTService(
         device=WHISPER_DEVICE,
         compute_type=WHISPER_COMPUTE,
         settings=SharedWhisperSTTService.Settings(
-            model=WHISPER_MODEL, language=Language.EN
+            model=WHISPER_MODEL, language=Language.EN, initial_prompt=WHISPER_PROMPT or None
         ),
     )
 

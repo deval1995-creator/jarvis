@@ -6,8 +6,9 @@ read-only. Three layers keep it that way:
 1. Selection: at startup the Core switches off every other MCP server for
    Jarvis's home folder (Claude Code remembers this per folder), so they stop
    loading into the context.
-2. Permissions: only the read tools below are allowed; the write tools are
-   explicitly denied; anything else hits `deny_unlisted` and is refused.
+2. Permissions: the read tools below run freely; APPROVAL_TOOLS run only after
+   Deval approves the exact call (an approval card); BLOCKED_TOOLS are denied by
+   name and never reach Claude; anything else is refused by `deny_unlisted`.
 3. Taint: once a session reads email or calendar content, it is marked
    untrusted, and memory changes wait for Deval's approval.
 """
@@ -37,26 +38,31 @@ READ_TOOLS = {
     GMAIL: ["search_threads", "get_thread", "get_message", "list_labels", "list_drafts", "get_draft"],
     CALENDAR: ["list_calendars", "list_events", "get_event", "search_events", "suggest_time"],
 }
-# Listed so they are refused by name even if a later setting would allow them.
-WRITE_TOOLS = {
+# Actions outside the PC that Jarvis may take, one approved call at a time.
+APPROVAL_TOOLS = {
+    GMAIL: ["send_message", "reply", "create_draft"],
+    CALENDAR: ["create_event", "update_event", "respond_to_event"],
+}
+# Never: destructive, or easy to misuse. Denied by name so they can't be enabled by accident.
+BLOCKED_TOOLS = {
     GMAIL: [
-        "send_message", "reply", "forward", "create_draft", "update_draft", "delete_draft",
+        "forward", "update_draft", "delete_draft",
         "trash_thread", "untrash_thread", "trash_message", "untrash_message",
         "mark_thread_spam", "unmark_thread_spam", "mark_message_spam", "unmark_message_spam",
         "label_thread", "unlabel_thread", "label_message", "unlabel_message", "update_message_labels",
         "apply_sensitive_thread_label", "apply_sensitive_message_label",
         "create_label", "update_label", "delete_label", "download_gmail_attachment",
     ],
-    CALENDAR: ["create_event", "update_event", "delete_event", "respond_to_event"],
+    CALENDAR: ["delete_event"],
 }
 
 ALLOWED_TOOLS = [_prefix(s) + t for s, tools in READ_TOOLS.items() for t in tools]
-DISALLOWED_TOOLS = [_prefix(s) + t for s, tools in WRITE_TOOLS.items() for t in tools]
-UNTRUSTED_PREFIXES = tuple(_prefix(s) for s in ALLOWED_SERVERS)
-
-
+_READ_SET = frozenset(ALLOWED_TOOLS)
+NEEDS_APPROVAL = {_prefix(s) + t for s, tools in APPROVAL_TOOLS.items() for t in tools}
+DISALLOWED_TOOLS = [_prefix(s) + t for s, tools in BLOCKED_TOOLS.items() for t in tools]
 def reads_outside_content(tool_name: str) -> bool:
-    return tool_name.startswith(UNTRUSTED_PREFIXES)
+    """Tools whose results contain text other people wrote (emails, invites)."""
+    return tool_name in _READ_SET
 
 
 async def deny_unlisted(tool_name: str, tool_input: dict, context) -> PermissionResultDeny:

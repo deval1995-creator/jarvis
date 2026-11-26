@@ -128,6 +128,37 @@ MIGRATIONS: list[str] = [
     """
     alter table conversations add column untrusted integer not null default 0;
     """,
+    # v7: approvals for actions outside the PC, and an audit log of every tool call.
+    """
+    create table approvals (
+        id              text primary key,
+        conversation_id text,
+        tool            text not null,
+        arguments       text not null,     -- JSON, exactly what will run
+        arguments_hash  text not null,     -- sha256 of the canonical JSON
+        untrusted       integer not null default 0,  -- the conversation had read email/calendar
+        status          text not null default 'pending'
+                        check (status in ('pending', 'approved', 'rejected', 'expired', 'cancelled')),
+        created_at      text not null,
+        decided_at      text
+    );
+    create index approvals_status on approvals(status, created_at);
+    create table tool_audit (
+        id              integer primary key,
+        conversation_id text,
+        session_id      text,
+        tool_use_id     text,
+        tool            text not null,
+        arguments       text,
+        status          text not null,     -- requested | allowed | awaiting_approval | approved | denied | done | failed
+        approval_id     text references approvals(id),
+        result_summary  text,
+        created_at      text not null,
+        finished_at     text
+    );
+    create index tool_audit_use on tool_audit(tool_use_id);
+    create index tool_audit_created on tool_audit(created_at);
+    """,
 ]
 
 

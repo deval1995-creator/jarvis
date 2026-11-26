@@ -47,6 +47,15 @@
   .card input[type=text] { width: 100%; margin-top: 6px; }
   .empty { font-size: 13px; color: var(--muted); }
   #inboxCount { background: var(--warn); color: var(--bg); border-radius: 999px; padding: 0 7px; font-size: 12px; }
+  .approval { align-self: stretch; max-width: 75ch; border: 2px solid var(--warn); border-radius: 12px; padding: 12px 14px; }
+  .approval h3 { margin: 0 0 6px; font-size: 15px; }
+  .approval dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 14px; }
+  .approval dt { color: var(--muted); }
+  .approval dd { margin: 0; white-space: pre-wrap; word-break: break-word; }
+  .approval .warn { color: var(--warn); font-size: 13px; margin-top: 8px; }
+  .approval .actions { display: flex; gap: 8px; margin-top: 10px; }
+  .approval.decided { border-color: var(--line); opacity: .75; }
+  .approval .outcome { font-weight: 600; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -104,6 +113,58 @@ function toolNote(name) {
   const short = name.replace(/^mcp__\w+?__/, "");
   const note = el("div", "toolnote", "· " + (TOOL_LABELS[short] || "used " + short));
   log.insertBefore(note, current); // above the reply it belongs to
+}
+
+// ---------- approval cards ----------
+const ACTION_TITLES = {
+  send_message: "Send this email?", reply: "Send this reply?", create_draft: "Save this draft in Gmail?",
+  create_event: "Create this calendar event?", update_event: "Change this calendar event?",
+  respond_to_event: "Answer this invitation?",
+};
+const OUTCOMES = { approved: "Approved", rejected: "Rejected", expired: "Expired: no answer in 10 minutes",
+                   cancelled: "Cancelled" };
+const cards = new Map();
+
+function fmt(v) {
+  if (Array.isArray(v)) return v.map(fmt).join(", ");
+  if (v && typeof v === "object") return Object.entries(v).map(([k, x]) => `${k}: ${fmt(x)}`).join("\n");
+  return String(v);
+}
+
+function approvalCard(a) {
+  const short = a.tool.replace(/^mcp__\w+?__/, "");
+  const c = el("div", "approval");
+  c.append(el("h3", "", ACTION_TITLES[short] || `Allow ${short}?`));
+  const dl = el("dl");
+  for (const [k, v] of Object.entries(a.arguments)) {
+    if (v === null || v === "" || (Array.isArray(v) && !v.length)) continue;
+    dl.append(el("dt", "", k.replace(/_/g, " ")), el("dd", "", fmt(v)));
+  }
+  c.append(dl);
+  if (a.untrusted) c.append(el("div", "warn",
+    "⚠ This conversation has read email or calendar content written by other people. Check this is what you asked for."));
+  const actions = el("div", "actions");
+  const yes = el("button", "primary", "Approve"), no = el("button", "", "Reject");
+  yes.onclick = () => api(`/api/approvals/${a.id}/approve`, { method: "POST" }).catch((e) => alert(e.message));
+  no.onclick = () => api(`/api/approvals/${a.id}/reject`, { method: "POST" }).catch((e) => alert(e.message));
+  actions.append(yes, no); c.append(actions);
+  cards.set(a.id, c);
+  if (a.status !== "pending") settleCard(a);
+  return c;
+}
+
+function settleCard(a) {
+  const c = cards.get(a.id);
+  if (!c) return;
+  c.classList.add("decided");
+  c.querySelector(".actions")?.remove();
+  if (!c.querySelector(".outcome")) c.append(el("div", "outcome", OUTCOMES[a.status] || a.status));
+}
+
+async function loadApprovals() {
+  for (const a of await api("/api/approvals")) {
+    if (!cards.has(a.id)) { log.append(approvalCard(a)); log.scrollTop = log.scrollHeight; }
+  }
 }
 
 // ---------- memory panel ----------
@@ -185,7 +246,16 @@ function connect() {
   ws.onclose = () => { connEl.textContent = "disconnected, retrying…"; setTimeout(connect, 1500); };
   ws.onmessage = (e) => {
     const ev = JSON.parse(e.data);
-    if (ev.type === "ready") { connEl.textContent = "connected"; loadHistory(); loadInbox(); loadMemories(); }
+    if (ev.type === "ready") {
+      connEl.textContent = "connected";
+      loadHistory().then(loadApprovals); loadInbox(); loadMemories();
+    }
+    else if (ev.type === "approval_request") {
+      const card = approvalCard(ev.approval);
+      if (current) log.insertBefore(card, current); else log.append(card);
+      log.scrollTop = log.scrollHeight;
+    }
+    else if (ev.type === "approval_decided") { settleCard(ev.approval); }
     else if (ev.type === "start") { add("user", ev.text, ev.source); current = add("assistant", ""); }
     else if (ev.type === "delta" && current) { current.textContent += ev.text; log.scrollTop = log.scrollHeight; }
     else if (ev.type === "tool" && current) { toolNote(ev.name); }

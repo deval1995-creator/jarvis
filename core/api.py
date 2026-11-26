@@ -22,7 +22,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from core import db, memory, memory_review, store
+from core import approvals, audit, db, memory, memory_review, store
 from core.sessions import SOURCES, BackendFactory, SessionManager
 
 log = logging.getLogger(__name__)
@@ -114,15 +114,6 @@ def create_app(
             on_proposal=on_proposal,
         )
 
-        async def before_tool(tool_name: str) -> None:
-            # Runs before the tool does, so a memory call later in the same turn
-            # already sees the conversation as untrusted.
-            from core.connectors import reads_outside_content
-
-            if reads_outside_content(tool_name) and not manager.untrusted:
-                manager.mark_untrusted()
-                await hub.broadcast({"type": "untrusted", "conversation_id": manager.conversation_id})
-
         def backend_factory(resume):
             return SDKBackend(
                 resume,
@@ -130,7 +121,49 @@ def create_app(
                 allowed_tools=ALLOWED_TOOLS,
                 connectors=connectors,
                 before_tool=before_tool,
+                after_tool=after_tool,
+                can_use_tool=permission_gate,
             )
+
+    # ----- tool calls: audit, untrusted flag, approvals (bound late, like manager) -----
+
+    async def on_approval_event(event: dict) -> None:
+        await hub.broadcast(event)
+
+    broker = approvals.ApprovalBroker(conn, on_event=on_approval_event)
+
+    async def before_tool(tool_name: str, tool_input: dict, tool_use_id, session_id) -> None:
+        """Runs before every tool call (and before the permission check)."""
+        from core.connectors import reads_outside_content
+
+        audit.started(conn, tool=tool_name, arguments=tool_input, tool_use_id=tool_use_id,
+                      session_id=session_id, conversation_id=manager.conversation_id)
+        # Before the tool runs, so a memory call later in the same turn already
+        # sees the conversation as untrusted.
+        if reads_outside_content(tool_name) and not manager.untrusted:
+            manager.mark_untrusted()
+            await hub.broadcast({"type": "untrusted", "conversation_id": manager.conversation_id})
+
+    async def after_tool(tool_use_id, response, error) -> None:
+        audit.finished(conn, tool_use_id, result=response, error=error)
+
+    async def permission_gate(tool_name: str, tool_input: dict, context):
+        """Claude Code asks here for every tool that isn't plainly allowed."""
+        from core.connectors import NEEDS_APPROVAL, deny_unlisted
+
+        tool_use_id = getattr(context, "tool_use_id", None)
+        if tool_name not in NEEDS_APPROVAL:
+            audit.set_status(conn, tool_use_id, "denied")
+            return await deny_unlisted(tool_name, tool_input, context)
+        result = await broker.request(
+            tool_name,
+            tool_input,
+            conversation_id=manager.conversation_id,
+            untrusted=manager.untrusted,
+            on_created=lambda approval_id: audit.set_status(conn, tool_use_id, "awaiting_approval", approval_id),
+        )
+        audit.set_status(conn, tool_use_id, "approved" if result.behavior == "allow" else "denied")
+        return result
 
     manager = SessionManager(conn, backend_factory)
     background_tasks: set[asyncio.Task] = set()
@@ -189,6 +222,10 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        expired = broker.expire_orphans()
+        pruned = audit.prune(conn)
+        if expired or pruned:
+            log.info("startup: expired %d stale approvals, pruned %d old audit rows", expired, pruned)
         watcher = asyncio.create_task(idle_review_loop())
         warmer = asyncio.create_task(warm_up())
         background_tasks.add(warmer)
@@ -202,6 +239,8 @@ def create_app(
     app = FastAPI(title="Jarvis Core", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
     app.state.manager = manager
+    app.state.broker = broker
+    app.state.tool_hooks = {"before": before_tool, "after": after_tool, "gate": permission_gate}
 
     def require_token(x_jarvis_token: str = Header(default="")) -> None:
         if not secrets.compare_digest(x_jarvis_token, token):
@@ -230,6 +269,7 @@ def create_app(
 
     @app.post("/api/interrupt", dependencies=[Depends(require_token)])
     async def interrupt() -> dict:
+        await broker.cancel_all()
         return {"interrupted": await manager.interrupt()}
 
     @app.get("/api/conversations", dependencies=[Depends(require_token)])
@@ -250,8 +290,13 @@ def create_app(
     @app.post("/api/conversations/new", dependencies=[Depends(require_token)])
     async def new_conversation() -> dict:
         ended = manager.conversation_id
+        await broker.cancel_all()
         conversation_id = await manager.new_conversation()
         review_in_background(ended)
+        # Start the new session now so its connectors are ready for the first message.
+        warmer = asyncio.create_task(warm_up())
+        background_tasks.add(warmer)
+        warmer.add_done_callback(background_tasks.discard)
         await hub.broadcast({"type": "new_conversation", "conversation_id": conversation_id})
         return {"conversation_id": conversation_id}
 
@@ -329,6 +374,32 @@ def create_app(
         memory.set_auto_approve(conn, body.enabled)
         return {"enabled": memory.auto_approve_enabled(conn)}
 
+    # ----- approvals and audit -----
+
+    def _approval_call(coro_fn, *args):
+        async def run():
+            try:
+                return await coro_fn(*args)
+            except approvals.ApprovalError as e:
+                raise HTTPException(status_code=409, detail=str(e))
+        return run()
+
+    @app.get("/api/approvals", dependencies=[Depends(require_token)])
+    async def list_approvals(status: str = "pending") -> list[dict]:
+        return broker.list(status)
+
+    @app.post("/api/approvals/{approval_id}/approve", dependencies=[Depends(require_token)])
+    async def approve_action(approval_id: str) -> dict:
+        return await _approval_call(broker.decide, approval_id, True)
+
+    @app.post("/api/approvals/{approval_id}/reject", dependencies=[Depends(require_token)])
+    async def reject_action(approval_id: str) -> dict:
+        return await _approval_call(broker.decide, approval_id, False)
+
+    @app.get("/api/audit", dependencies=[Depends(require_token)])
+    async def get_audit(limit: int = 100) -> list[dict]:
+        return audit.recent(conn, min(limit, 1000))
+
     @app.get("/api/status", dependencies=[Depends(require_token)])
     async def get_status() -> dict:
         return {**manager.status(), "connectors": getattr(manager.backend, "connector_status", None)}
@@ -372,6 +443,7 @@ def create_app(
                     turn_tasks.add(task)
                     task.add_done_callback(turn_tasks.discard)
                 elif kind == "interrupt":
+                    await broker.cancel_all()
                     await manager.interrupt()
                 else:
                     await ws.send_json({"type": "error", "error": f"unknown type {kind!r}"})

@@ -12,12 +12,16 @@ from tests.fakes import FakeBackend
 def test_tool_names_match_claude_code_naming():
     assert "mcp__claude_ai_Gmail__search_threads" in connectors.ALLOWED_TOOLS
     assert "mcp__claude_ai_Google_Calendar__list_events" in connectors.ALLOWED_TOOLS
-    assert "mcp__claude_ai_Gmail__send_message" in connectors.DISALLOWED_TOOLS
-    assert "mcp__claude_ai_Google_Calendar__create_event" in connectors.DISALLOWED_TOOLS
+    assert "mcp__claude_ai_Gmail__send_message" in connectors.NEEDS_APPROVAL
+    assert "mcp__claude_ai_Google_Calendar__create_event" in connectors.NEEDS_APPROVAL
+    assert "mcp__claude_ai_Gmail__trash_thread" in connectors.DISALLOWED_TOOLS
+    assert "mcp__claude_ai_Google_Calendar__delete_event" in connectors.DISALLOWED_TOOLS
 
 
-def test_no_tool_is_both_allowed_and_denied():
-    assert not set(connectors.ALLOWED_TOOLS) & set(connectors.DISALLOWED_TOOLS)
+def test_tool_sets_do_not_overlap():
+    allowed, blocked = set(connectors.ALLOWED_TOOLS), set(connectors.DISALLOWED_TOOLS)
+    approval = connectors.NEEDS_APPROVAL
+    assert not allowed & approval and not allowed & blocked and not approval & blocked
 
 
 def test_unlisted_tools_are_refused():
@@ -29,6 +33,9 @@ def test_outside_content_detection():
     assert connectors.reads_outside_content("mcp__claude_ai_Gmail__get_thread")
     assert connectors.reads_outside_content("mcp__claude_ai_Google_Calendar__list_events")
     assert not connectors.reads_outside_content("mcp__memory__recall")
+    # acting is not reading: a create/send call doesn't make the conversation untrusted
+    assert not connectors.reads_outside_content("mcp__claude_ai_Google_Calendar__create_event")
+    assert not connectors.reads_outside_content("mcp__claude_ai_Gmail__send_message")
 
 
 def test_session_options_with_connectors():
@@ -40,7 +47,10 @@ def test_session_options_with_connectors():
     assert JARVIS_DIR not in AGENT_HOME.parents  # outside the repo
     assert not o.strict_mcp_config
     assert "mcp__memory__recall" in o.allowed_tools and "mcp__claude_ai_Gmail__get_thread" in o.allowed_tools
-    assert "mcp__claude_ai_Gmail__send_message" in o.disallowed_tools
+    assert "mcp__claude_ai_Gmail__trash_thread" in o.disallowed_tools
+    # approval tools must reach can_use_tool: neither allowed outright nor denied
+    assert "mcp__claude_ai_Gmail__send_message" not in o.allowed_tools
+    assert "mcp__claude_ai_Gmail__send_message" not in o.disallowed_tools
     assert o.can_use_tool is connectors.deny_unlisted
     assert o.tools == []  # no files, shell or web
 
@@ -53,13 +63,26 @@ def test_session_options_without_connectors_stays_slim():
 def test_before_tool_hook_runs_with_tool_name():
     seen = []
 
-    async def before(name):
-        seen.append(name)
+    async def before(name, tool_input, tool_use_id, session_id):
+        seen.append((name, tool_input, tool_use_id, session_id))
 
-    o = session_options(connectors=True, before_tool=before)
-    hook = o.hooks["PreToolUse"][0].hooks[0]
-    assert asyncio.run(hook({"tool_name": "mcp__claude_ai_Gmail__get_thread"}, "t1", None)) == {}
-    assert seen == ["mcp__claude_ai_Gmail__get_thread"]
+    async def after(tool_use_id, response, error):
+        seen.append((tool_use_id, response, error))
+
+    o = session_options(connectors=True, before_tool=before, after_tool=after)
+    pre = o.hooks["PreToolUse"][0].hooks[0]
+    post = o.hooks["PostToolUse"][0].hooks[0]
+    fail = o.hooks["PostToolUseFailure"][0].hooks[0]
+    hook_in = {"tool_name": "mcp__claude_ai_Gmail__get_thread", "tool_input": {"id": "x"},
+               "tool_use_id": "t1", "session_id": "s"}
+    assert asyncio.run(pre(hook_in, "t1", None)) == {}
+    asyncio.run(post({"tool_use_id": "t1", "tool_response": "ok"}, "t1", None))
+    asyncio.run(fail({"tool_use_id": "t2", "error": "boom"}, "t2", None))
+    assert seen == [
+        ("mcp__claude_ai_Gmail__get_thread", {"id": "x"}, "t1", "s"),
+        ("t1", "ok", None),
+        ("t2", None, "boom"),
+    ]
 
 
 class FakeClient:

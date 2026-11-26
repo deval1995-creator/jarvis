@@ -7,6 +7,7 @@ long-lived ClaudeSDKClient, resumed from a stored session id after a restart.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -51,7 +52,10 @@ def prepare_agent_home() -> Path:
         target.write_text(persona, encoding="utf-8")
     return AGENT_HOME
 
-ToolHook = Callable[[str], Awaitable[None]]
+# before_tool(tool_name, tool_input, tool_use_id, session_id)
+ToolHook = Callable[[str, dict, "str | None", "str | None"], Awaitable[None]]
+# after_tool(tool_use_id, response, error)
+AfterToolHook = Callable[["str | None", object, "str | None"], Awaitable[None]]
 
 
 @dataclass
@@ -80,6 +84,8 @@ def session_options(
     allowed_tools: list[str] | None = None,
     connectors: bool = False,
     before_tool: ToolHook | None = None,
+    after_tool: AfterToolHook | None = None,
+    can_use_tool=None,
 ) -> ClaudeAgentOptions:
     """The chat session: no built-in tools (files, shell, web), Jarvis's own MCP
     servers, and optionally the claude.ai connectors (read-only Gmail + Calendar).
@@ -101,18 +107,37 @@ def session_options(
 
         options.allowed_tools += conn_policy.ALLOWED_TOOLS
         options.disallowed_tools = list(conn_policy.DISALLOWED_TOOLS)
-        options.can_use_tool = conn_policy.deny_unlisted  # anything not listed is refused
+        # Approval tools and anything unlisted come here; the default refuses all.
+        options.can_use_tool = can_use_tool or conn_policy.deny_unlisted
     else:
         options.strict_mcp_config = True
         options.env = {"ENABLE_CLAUDEAI_MCP_SERVERS": "false"}
         options.can_use_tool = None
+    hooks: dict = {}
     if before_tool is not None:
 
         async def pre_tool_use(hook_input, tool_use_id, context):
-            await before_tool(hook_input["tool_name"])
+            await before_tool(
+                hook_input["tool_name"], hook_input.get("tool_input") or {},
+                hook_input.get("tool_use_id") or tool_use_id, hook_input.get("session_id"),
+            )
             return {}
 
-        options.hooks = {"PreToolUse": [HookMatcher(matcher=None, hooks=[pre_tool_use])]}
+        hooks["PreToolUse"] = [HookMatcher(matcher=None, hooks=[pre_tool_use])]
+    if after_tool is not None:
+
+        async def post_tool_use(hook_input, tool_use_id, context):
+            await after_tool(hook_input.get("tool_use_id") or tool_use_id, hook_input.get("tool_response"), None)
+            return {}
+
+        async def post_tool_failure(hook_input, tool_use_id, context):
+            await after_tool(hook_input.get("tool_use_id") or tool_use_id, None, hook_input.get("error") or "failed")
+            return {}
+
+        hooks["PostToolUse"] = [HookMatcher(matcher=None, hooks=[post_tool_use])]
+        hooks["PostToolUseFailure"] = [HookMatcher(matcher=None, hooks=[post_tool_failure])]
+    if hooks:
+        options.hooks = hooks
     return options
 
 
@@ -124,43 +149,62 @@ class SDKBackend:
         allowed_tools: list[str] | None = None,
         connectors: bool = False,
         before_tool: ToolHook | None = None,
+        after_tool: AfterToolHook | None = None,
+        can_use_tool=None,
     ):
+        self._after_tool = after_tool
+        self._can_use_tool = can_use_tool
         self._resume = resume
         self._mcp_servers = mcp_servers
         self._allowed_tools = allowed_tools
         self._connectors = connectors
         self._before_tool = before_tool
         self._client: ClaudeSDKClient | None = None
+        self._connect_lock = asyncio.Lock()
         self.connector_status: dict[str, str] | None = None
 
     def _options(self, resume: str | None) -> ClaudeAgentOptions:
-        return session_options(resume, self._mcp_servers, self._allowed_tools, self._connectors, self._before_tool)
+        return session_options(
+            resume, self._mcp_servers, self._allowed_tools, self._connectors,
+            self._before_tool, self._after_tool, self._can_use_tool,
+        )
 
     async def warm(self) -> dict[str, str] | None:
-        """Start the session ahead of the first message and settle the connectors."""
-        client = await self._ensure_client()
-        if self._connectors:
-            from core import connectors as conn_policy
-
-            self.connector_status = await conn_policy.select_servers(client)
+        """Start the session ahead of the first message, connectors loaded."""
+        await self._ensure_client()
         return self.connector_status
 
     async def _ensure_client(self) -> ClaudeSDKClient:
-        if self._client is None:
-            client = ClaudeSDKClient(options=self._options(self._resume))
-            try:
-                await client.connect()
-            except Exception:
-                if not self._resume:
-                    raise
-                # The stored session may be gone (deleted, or a different machine).
-                # Start fresh rather than refusing to talk.
-                log.warning("could not resume session %s; starting a new one", self._resume)
-                self._resume = None
-                client = ClaudeSDKClient(options=self._options(None))
-                await client.connect()
-            self._client = client
-        return self._client
+        # warm() and the first turn can race; only one of them may connect.
+        async with self._connect_lock:
+            if self._client is None:
+                self._client = await self._connect()
+            return self._client
+
+    async def _connect(self) -> ClaudeSDKClient:
+        client = await self._open()
+        if self._connectors:
+            # Connectors load in the background after connect. Wait for them (and
+            # re-apply the selection) so the first message has its tools.
+            from core import connectors as conn_policy
+
+            self.connector_status = await conn_policy.select_servers(client)
+        return client
+
+    async def _open(self) -> ClaudeSDKClient:
+        client = ClaudeSDKClient(options=self._options(self._resume))
+        try:
+            await client.connect()
+        except Exception:
+            if not self._resume:
+                raise
+            # The stored session may be gone (deleted, or a different machine).
+            # Start fresh rather than refusing to talk.
+            log.warning("could not resume session %s; starting a new one", self._resume)
+            self._resume = None
+            client = ClaudeSDKClient(options=self._options(None))
+            await client.connect()
+        return client
 
     async def turn(self, text: str) -> AsyncIterator[TurnEvent]:
         client = await self._ensure_client()

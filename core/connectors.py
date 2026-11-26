@@ -40,8 +40,8 @@ def _prefix(server_name: str) -> str:
 
 
 READ_TOOLS = {
-    GMAIL: ["search_threads", "get_thread", "get_message", "list_labels", "list_drafts", "get_draft"],
-    CALENDAR: ["list_calendars", "list_events", "get_event", "search_events", "suggest_time"],
+    GMAIL: ["search_threads", "get_thread", "get_message"],
+    CALENDAR: ["list_calendars", "list_events", "get_event", "search_events"],
     # Read-only account and market data. Never orders: Jarvis doesn't trade.
     IBKR: [
         "get_account_summary", "get_account_balances", "get_account_positions", "get_account_orders",
@@ -74,11 +74,27 @@ BLOCKED_TOOLS = {
     ],
 }
 
+# Not needed, so not loaded: every tool definition is sent to Claude on every turn
+# (IBKR alone has 49), which costs Pro usage and response time.
+UNUSED_TOOLS = {
+    GMAIL: ["list_drafts", "get_draft", "list_labels"],  # ~3,400 tokens, rarely useful by voice
+    CALENDAR: ["suggest_time"],
+    IBKR: [
+        "get_alert", "get_alerts", "get_combo_identifier", "get_option_data", "get_option_parameters",
+        "search_futures", "get_earnings_insight", "search_earnings_insights", "get_flow_type",
+        "get_company_connections", "get_company_themes", "get_theme_details", "search_investment_topics",
+        "get_order_instructions", "get_saved_screener", "get_screener_asset_classes",
+        "get_screener_capabilities", "get_screener_industries", "get_screener_templates",
+        "get_screener_themes", "list_saved_screeners", "preview_screener", "run_saved_screener", "whats_new",
+    ],
+}
+
 ALLOWED_TOOLS = [_prefix(s) + t for s, tools in READ_TOOLS.items() for t in tools]
 # Reads whose results hold text other people wrote (emails, invites). Broker data isn't that.
 _READ_SET = frozenset(_prefix(s) + t for s in (GMAIL, CALENDAR) for t in READ_TOOLS[s])
 NEEDS_APPROVAL = {_prefix(s) + t for s, tools in APPROVAL_TOOLS.items() for t in tools}
-DISALLOWED_TOOLS = [_prefix(s) + t for s, tools in BLOCKED_TOOLS.items() for t in tools]
+DISALLOWED_TOOLS = [_prefix(s) + t for group in (BLOCKED_TOOLS, UNUSED_TOOLS)
+                    for s, tools in group.items() for t in tools]
 def reads_outside_content(tool_name: str) -> bool:
     """Tools whose results contain text other people wrote (emails, invites)."""
     return tool_name in _READ_SET

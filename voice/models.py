@@ -31,7 +31,11 @@ WHISPER_PROMPT = os.environ.get("JARVIS_WHISPER_PROMPT", "Deval talking to Jarvi
 # JARVIS_SAVE_SPEECH=1 keeps each segment Whisper hears as a WAV in the data
 # folder (speech_debug), to tell bad audio from bad recognition. Off by default.
 SAVE_SPEECH = os.environ.get("JARVIS_SAVE_SPEECH") == "1"
+# A Kokoro voice ("bm_george") or a blend of them ("bm_george:0.6+bm_fable:0.4").
 VOICE = os.environ.get("JARVIS_VOICE", "bm_george")
+VOICE_SPEED = float(os.environ.get("JARVIS_VOICE_SPEED", "1.0"))
+# Voice names start with an accent letter: a = American, b = British.
+VOICE_LANG = "en-gb" if all(part.strip().startswith("b") for part in VOICE.split("+")) else "en-us"
 TTS_DEVICE = os.environ.get("JARVIS_TTS_DEVICE", "cuda")
 
 _lock = threading.Lock()
@@ -53,8 +57,22 @@ def _shared_kokoro(model_path: str, voices_path: str):
             session = rt.InferenceSession(model_path, providers=providers)
             if TTS_DEVICE == "cuda" and "CUDAExecutionProvider" not in session.get_providers():
                 log.warning("Kokoro could not use the GPU; speaking from the CPU (slower)")
-            _kokoro[key] = _KokoroClass.from_session(session, voices_path)
+            kokoro = _KokoroClass.from_session(session, voices_path)
+            kokoro.voices = dict(kokoro.voices)  # writable, so blends can be added
+            if "+" in VOICE or ":" in VOICE:
+                kokoro.voices[VOICE] = blend(kokoro, VOICE)
+            _kokoro[key] = kokoro
         return _kokoro[key]
+
+
+def blend(kokoro, spec: str):
+    """Mix voices by weight: "bm_george:0.6+bm_fable:0.4"."""
+    total = None
+    for part in spec.split("+"):
+        name, _, weight = part.strip().partition(":")
+        style = kokoro.voices[name] * float(weight or 1)
+        total = style if total is None else total + style
+    return total
 
 
 kokoro_tts.Kokoro = _shared_kokoro  # KokoroTTSService builds one per connection otherwise
@@ -104,10 +122,10 @@ def make_stt() -> SharedWhisperSTTService:
 
 
 def make_tts(**kwargs) -> kokoro_tts.KokoroTTSService:
-    # Kokoro voice names start with an accent letter: a = American, b = British.
-    language = Language.EN_GB if VOICE.startswith("b") else Language.EN_US
+    language = Language.EN_GB if VOICE_LANG == "en-gb" else Language.EN_US
     return kokoro_tts.KokoroTTSService(
-        settings=kokoro_tts.KokoroTTSService.Settings(voice=VOICE, language=language), **kwargs
+        settings=kokoro_tts.KokoroTTSService.Settings(voice=VOICE, language=language, speed=VOICE_SPEED),
+        **kwargs,
     )
 
 
@@ -122,5 +140,5 @@ def preload() -> None:
     for whisper in _whisper.values():
         list(whisper.transcribe(np.zeros(16000, dtype=np.float32), language="en")[0])
     for kokoro in _kokoro.values():
-        kokoro.create("Ready.", voice=VOICE, lang="en-gb" if VOICE.startswith("b") else "en-us")
+        kokoro.create("Ready.", voice=VOICE, lang=VOICE_LANG, speed=VOICE_SPEED)
     log.info("speech models ready")

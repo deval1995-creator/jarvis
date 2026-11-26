@@ -54,8 +54,9 @@
   .sys .k { color: var(--muted); letter-spacing: .06em; }
   .sys .v { text-align: right; }
   .v.ok { color: var(--good); } .v.off { color: var(--muted); } .v.warn { color: var(--warn); } .v.bad { color: var(--bad); }
-  #mempanel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-  #mempanel .scroll { overflow-y: auto; min-height: 0; flex: 1; margin-top: 6px; padding-right: 4px; }
+  #mempanel { max-height: 50%; display: flex; flex-direction: column; min-height: 0; }
+  #mempanel .scroll { overflow-y: auto; min-height: 0; flex: 1; padding-right: 4px; }
+  #mempanel[hidden] { display: none; }
   .item { border-left: 2px solid var(--line); padding: 4px 8px; margin-bottom: 6px; font-size: 12px; }
   .item.pending { border-left-color: var(--warn); }
   .item .tag { font-size: 10px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
@@ -63,18 +64,17 @@
   .item .actions { display: flex; gap: 6px; margin-top: 4px; }
   .item input[type=text] { width: 100%; margin-top: 4px; }
   .empty { color: var(--muted); font-size: 12px; }
-  label.toggle { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 11px; margin-bottom: 6px; }
 
   /* centre */
   #centre { grid-column: 2; grid-row: 2; position: relative; display: flex; flex-direction: column; align-items: center;
-            justify-content: center; min-height: 0; }
-  #orb { width: min(100%, 66vh); aspect-ratio: 1; }
+            justify-content: center; min-height: 0; overflow: hidden; }
+  #orb { width: min(100%, 60vh); aspect-ratio: 1; flex: none; }
   #vlabel { position: absolute; top: 4px; left: 0; font-size: 11px; letter-spacing: .25em; color: var(--muted); }
-  #subs { width: min(100%, 760px); text-align: center; min-height: 76px; }
+  #subs { width: min(100%, 760px); text-align: center; min-height: 76px; flex: none; }
   #subs .you { color: var(--muted); font-size: 12px; letter-spacing: .04em; }
   #subs .you:not(:empty)::before { content: "▸ "; color: var(--c); }
-  #subs .reply { color: var(--c-hi); font-size: 15px; margin-top: 4px; max-height: 6.2em; overflow: hidden;
-                 display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
+  #subs .reply { color: var(--c-hi); font-size: 15px; margin-top: 4px; max-height: 4.5em; overflow: hidden;
+                 display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
 
   /* bottom centre numbers */
   #numbers { grid-column: 2; grid-row: 3; justify-self: center; display: flex; border-color: var(--line-hi);
@@ -151,13 +151,9 @@
     <h2>Systems</h2>
     <div class="sys" id="systems"></div>
   </div>
-  <div class="panel" id="mempanel">
-    <h2>Approvals <span class="count" id="inboxCount" hidden></span></h2>
-    <div id="inbox"></div>
-    <h2 style="margin-top:10px">Memory</h2>
-    <label class="toggle"><input type="checkbox" id="autosave"> save automatically (asks only for critical ones)</label>
-    <input type="search" id="memq" placeholder="search memory">
-    <div class="scroll" id="memories"></div>
+  <div class="panel" id="mempanel" hidden>
+    <h2>Needs your approval <span class="count" id="inboxCount"></span></h2>
+    <div class="scroll" id="inbox"></div>
   </div>
 </section>
 
@@ -332,33 +328,16 @@ function proposalCard(p) {
 }
 async function loadInbox() {
   const items = await api("/api/memory/proposals");
-  $("inbox").replaceChildren(...(items.length ? items.map(proposalCard) : [el("div", "empty", "Nothing waiting.")]));
-  $("autosave").checked = (await api("/api/memory/settings/auto-approve")).enabled;
-  $("inboxCount").hidden = !items.length;
+  $("inbox").replaceChildren(...items.map(proposalCard));
+  $("mempanel").hidden = !items.length;
   $("inboxCount").textContent = items.length;
 }
+// Memory stays in the background; the page only shows how many are saved.
 let memCount = 0;
 async function loadMemories() {
-  const q = $("memq").value.trim();
-  const items = await api("/api/memory" + (q ? "?q=" + encodeURIComponent(q) : ""));
-  if (!q) memCount = items.length;
-  $("memories").replaceChildren(...(items.length ? items.map((m) => {
-    const c = el("div", "item");
-    c.append(el("div", "tag", [m.kind, m.category, m.pinned ? "pinned" : null].filter(Boolean).join(" · ")));
-    c.append(el("div", "", m.text));
-    const actions = el("div", "actions");
-    const pin = el("button", "", m.pinned ? "Unpin" : "Pin"), del = el("button", "", "Delete");
-    pin.onclick = () => api(`/api/memory/${m.id}`, { method: "PATCH", body: JSON.stringify({ pinned: !m.pinned }) }).then(loadMemories);
-    del.onclick = () => confirm("Delete this memory?") && api(`/api/memory/${m.id}`, { method: "DELETE" }).then(loadMemories);
-    actions.append(pin, del); c.append(actions);
-    return c;
-  }) : [el("div", "empty", q ? "No matches." : "No memories saved yet.")]));
+  memCount = (await api("/api/memory")).length;
   renderSystems();
 }
-$("autosave").onchange = (e) => api("/api/memory/settings/auto-approve",
-  { method: "PUT", body: JSON.stringify({ enabled: e.target.checked }) });
-let memTimer;
-$("memq").oninput = () => { clearTimeout(memTimer); memTimer = setTimeout(loadMemories, 250); };
 
 // ---------- status panels ----------
 let status = null;

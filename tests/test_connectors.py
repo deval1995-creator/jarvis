@@ -105,6 +105,7 @@ def test_select_servers_keeps_only_gmail_calendar_and_memory():
         ("claude.ai Slack", "connected"),
         ("claude.ai ElevenLabs", "connected"),
         ("claude.ai Google Drive", "needs-auth"),
+        ("claude.ai Interactive Brokers (IBKR)", "connected"),
         ("memory", "connected"),
     ])
     status = asyncio.run(connectors.select_servers(client))
@@ -145,3 +146,28 @@ def test_review_of_untrusted_conversation_needs_approval(conn):
     r = asyncio.run(memory_review.review_conversation(conn, cid, runner))
     assert r.saved == [] and len(r.pending) == 1
     assert "email" in memory.list_proposals(conn)[0]["review_reason"]
+
+
+class LateConnectorsClient(FakeClient):
+    """Jarvis's own servers are listed first; claude.ai connectors join later."""
+
+    def __init__(self):
+        super().__init__([("memory", "connected"), ("display", "connected")])
+        self.calls = 0
+
+    async def get_mcp_status(self):
+        self.calls += 1
+        if self.calls == 3:
+            self.servers.update({"claude.ai Gmail": "connected", "claude.ai Google Calendar": "pending",
+                                 "claude.ai Interactive Brokers (IBKR)": "connected"})
+        if self.calls == 5:
+            self.servers["claude.ai Google Calendar"] = "connected"
+        return await super().get_mcp_status()
+
+
+def test_wait_for_servers_waits_for_late_connectors():
+    client = LateConnectorsClient()
+    servers = asyncio.run(connectors.wait_for_servers(client))
+    names = {s["name"] for s in servers}
+    assert {"claude.ai Gmail", "claude.ai Google Calendar", "claude.ai Interactive Brokers (IBKR)"} <= names
+    assert all(s["status"] != "pending" for s in servers) and client.calls >= 5

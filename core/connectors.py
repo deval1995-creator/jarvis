@@ -106,15 +106,27 @@ async def deny_unlisted(tool_name: str, tool_input: dict, context) -> Permission
     return PermissionResultDeny(message=f"{tool_name} is not enabled for Jarvis.")
 
 
-async def wait_for_servers(client, timeout: float = 30.0) -> list[dict]:
-    """Connectors load in the background; wait until none is pending."""
+async def wait_for_servers(client, timeout: float = 45.0) -> list[dict]:
+    """Connectors load in the background; wait until the ones Jarvis uses are
+    listed and none is pending.
+
+    Jarvis's own in-process servers are listed at once, but the claude.ai
+    connectors join the list later. Waiting only for "nothing pending" could
+    return before they appear, leaving a session without Gmail, Calendar or IBKR.
+    """
     servers: list[dict] = []
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
         servers = (await client.get_mcp_status()).get("mcpServers", [])
-        if servers and not any(s.get("status") == "pending" for s in servers):
+        names = {s.get("name") for s in servers}
+        settled = servers and not any(s.get("status") == "pending" for s in servers)
+        if settled and ALLOWED_SERVERS <= names:
             break
         await asyncio.sleep(0.5)
+    else:
+        missing = ALLOWED_SERVERS - {s.get("name") for s in servers}
+        log.warning("connectors still missing after %.0f s: %s", timeout, sorted(missing))
     return servers
 
 

@@ -131,23 +131,28 @@
 
 
   /* windows Jarvis opens */
-  .win { position: fixed; z-index: 5; width: min(620px, 46vw); max-height: 72vh; display: flex; flex-direction: column;
-         background: rgba(3, 14, 30, .94); border: 1px solid var(--line-hi);
+  .win { position: fixed; z-index: 5; width: min(640px, 46vw); max-height: 86vh; display: flex; flex-direction: column;
+         background: rgba(3, 14, 30, .95); border: 1px solid var(--line-hi);
          box-shadow: 0 0 30px rgba(92, 200, 255, .18), inset 0 0 40px rgba(92, 200, 255, .05);
+         resize: both; overflow: hidden; min-width: 280px; min-height: 140px;
          animation: winIn .45s cubic-bezier(.2, .9, .3, 1.2); }
+  .win.size-small { width: min(380px, 90vw); }
+  .win.size-medium { width: min(640px, 90vw); }
+  .win.size-large { width: min(940px, 94vw); max-height: 88vh; }
+  .win.size-full { width: calc(100vw - 48px); height: calc(100vh - 100px); max-height: none; }
   .win.closing { animation: winOut .25s ease-in forwards; }
   @keyframes winIn { 0% { opacity: 0; transform: scale(.6) translateY(30px); clip-path: inset(48% 0 48% 0); }
                      55% { opacity: 1; clip-path: inset(0 0 0 0); } 100% { transform: none; } }
   @keyframes winOut { to { opacity: 0; transform: scale(.85); } }
   .win::before, .win::after { content: ""; position: absolute; width: 14px; height: 14px; border: 2px solid var(--c); }
-  .win::before { top: -2px; left: -2px; border-right: 0; border-bottom: 0; }
-  .win::after { bottom: -2px; right: -2px; border-left: 0; border-top: 0; }
+  .win::before { top: 0; left: 0; border-right: 0; border-bottom: 0; }
+  .win::after { bottom: 0; right: 0; border-left: 0; border-top: 0; pointer-events: none; }
   .win .bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line);
               cursor: move; user-select: none; background: linear-gradient(90deg, rgba(92, 200, 255, .14), transparent); }
   .win .bar .t { color: var(--c-hi); letter-spacing: .18em; text-transform: uppercase; font-size: 12px; flex: 1; }
   .win .bar .sub { color: var(--muted); font-size: 11px; }
   .win .bar button { padding: 2px 8px; }
-  .win .body { overflow: auto; padding: 12px 14px; min-height: 0; }
+  .win .body { overflow: auto; padding: 12px 14px; min-height: 0; flex: 1; }
   .win .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-bottom: 12px; }
   .win .stat { border: 1px solid var(--line); padding: 6px 10px; }
   .win .stat .v { font-size: 19px; color: var(--c-hi); }
@@ -165,10 +170,19 @@
   .win .it .w { color: var(--c); font-size: 12px; }
   .win .it .d { color: var(--muted); font-size: 11px; }
   .win .note { margin-top: 10px; font-size: 11px; color: var(--muted); }
-  .win.wide { width: min(900px, 64vw); }
-  .win .wtext { white-space: pre-wrap; color: var(--text); font-size: 13px; line-height: 1.55; margin-bottom: 10px; }
-  .win .wgraph { display: block; width: 100%; height: min(520px, 56vh); background:
-      radial-gradient(ellipse at center, rgba(20, 70, 130, .35), transparent 70%); border: 1px solid var(--line); }
+  .win .pgrid { display: grid; gap: 12px; }
+  .win .panelw { min-width: 0; }
+  .win .panelw h4 { margin: 0 0 6px; font-size: 10px; font-weight: 600; letter-spacing: .2em; color: var(--c); text-transform: uppercase; }
+  .win .stats { margin-bottom: 0; }
+  .win .tablewrap { overflow-x: auto; }
+  .win .wtext { white-space: pre-wrap; color: var(--text); font-size: 13px; line-height: 1.55; }
+  .win canvas.wchart, .win canvas.wgraph { display: block; width: 100%; border: 1px solid var(--line);
+      background: radial-gradient(ellipse at center, rgba(20, 70, 130, .3), transparent 75%); }
+  .win canvas.wchart { height: 230px; } .win canvas.wchart.small { height: 160px; }
+  .win canvas.wchart.large { height: 260px; } .win canvas.wchart.full { height: 32vh; }
+  .win canvas.wgraph { height: 360px; } .win canvas.wgraph.large { height: min(520px, 56vh); }
+  .win canvas.wgraph.full { height: 62vh; }
+  .win::-webkit-resizer { background: linear-gradient(135deg, transparent 50%, var(--c) 50%); }
 
   ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: var(--line); }
   @media (max-width: 1100px) { body { grid-template-columns: 1fr; grid-template-rows: auto; overflow: auto; }
@@ -245,6 +259,7 @@
 <script src="/static/voice.js"></script>
 <script src="/static/orb.js"></script>
 <script src="/static/graph.js"></script>
+<script src="/static/chart.js"></script>
 <script>
 const TOKEN = "__JARVIS_TOKEN__";
 const headers = { "X-Jarvis-Token": TOKEN, "Content-Type": "application/json" };
@@ -476,15 +491,74 @@ const wins = new Map();
 let winZ = 6, winN = 0;
 const isNum = (v) => /^[+\-−]?\s?[$€£₹]?\s?\d[\d,]*(\.\d+)?\s?%?$/.test(v.trim());
 const toneOf = (v) => (/^\+/.test(v.trim()) ? "up" : /^[-−]\s?[$€£₹]?\s?\d/.test(v.trim()) ? "down" : "");
+// One panel of a window: stats, table, items, chart, graph or text.
+function renderPanel(pn, size) {
+  const box = el("section", "panelw");
+  if (pn.span > 1) box.style.gridColumn = `span ${pn.span}`;
+  if (pn.title) box.append(el("h4", "", pn.title));
+  if (pn.type === "stats") {
+    const g = el("div", "stats");
+    for (const st of pn.stats) {
+      const c = el("div", "stat");
+      const tone = { up: "up", down: "down", warn: "warnc" }[st.tone] || "";
+      c.append(el("div", "v " + tone, st.value), el("div", "l", st.label));
+      g.append(c);
+    }
+    box.append(g);
+  } else if (pn.type === "table") {
+    const tb = pn.table, wrap = el("div", "tablewrap"), t = el("table"), head = el("tr");
+    const numeric = tb.columns.map((_, i) => tb.rows.length > 0 && tb.rows.every((r) => !r[i] || isNum(r[i])));
+    tb.columns.forEach((c, i) => head.append(el("th", numeric[i] ? "num" : "", c)));
+    t.append(head);
+    for (const r of tb.rows) {
+      const tr = el("tr");
+      tb.columns.forEach((_, i) => tr.append(el("td", ((numeric[i] ? "num " : "") + toneOf(r[i] || "")).trim(), r[i] ?? "")));
+      t.append(tr);
+    }
+    wrap.append(t); box.append(wrap);
+  } else if (pn.type === "items") {
+    const list = el("div", "items");
+    for (const it of pn.items) {
+      const row = el("div", "it"), right = el("div");
+      right.append(el("div", "", it.title));
+      if (it.detail) right.append(el("div", "d", it.detail));
+      row.append(el("div", "w", it.when || ""), right);
+      list.append(row);
+    }
+    box.append(list);
+  } else if (pn.type === "text") {
+    box.append(el("div", "wtext", pn.text));
+  } else if (pn.type === "chart") {
+    const cv = el("canvas", "wchart " + size);
+    box.append(cv);
+    requestAnimationFrame(() => new JarvisChart(cv, pn.chart));
+  } else if (pn.type === "graph") {
+    const cv = el("canvas", "wgraph " + size);
+    box.append(cv);
+    requestAnimationFrame(() => new JarvisGraph(cv, pn.graph));
+  }
+  return box;
+}
+
+const SIZE_W = { small: 380, medium: 640, large: 940 };
 function renderWindow(w) {
   let box = wins.get(w.id);
   const fresh = !box;
+  const size = w.size || "medium";
   if (fresh) {
     box = el("div", "win");
-    const k = winN++ % 5;
-    box.style.left = `calc(50% - min(310px, 23vw) + ${(k - 2) * 28}px)`;
-    box.style.top = `${90 + k * 26}px`;
     wins.set(w.id, box); document.body.append(box);
+  }
+  box.className = "win size-" + size;
+  if (fresh || box.dataset.size !== size) {  // place it: centred, cascading; full fills the screen
+    box.style.width = box.style.height = "";
+    if (size === "full") { box.style.left = "24px"; box.style.top = "70px"; }
+    else {
+      const k = winN++ % 5, width = Math.min(SIZE_W[size], innerWidth - 40);
+      box.style.left = Math.max(10, (innerWidth - width) / 2 + (k - 2) * 28) + "px";
+      box.style.top = 80 + k * 24 + "px";
+    }
+    box.dataset.size = size;
   }
   box.style.zIndex = ++winZ;
   box.replaceChildren();
@@ -494,46 +568,11 @@ function renderWindow(w) {
   bar.append(close);
   close.onclick = () => api(`/api/windows/${w.id}`, { method: "DELETE" }).catch(() => dropWindow(w.id));
   const body = el("div", "body");
-  if (w.stats?.length) {
-    const g = el("div", "stats");
-    for (const st of w.stats) {
-      const c = el("div", "stat");
-      const tone = { up: "up", down: "down", warn: "warnc" }[st.tone] || "";
-      c.append(el("div", "v " + tone, st.value), el("div", "l", st.label));
-      g.append(c);
-    }
-    body.append(g);
-  }
-  if (w.table) {
-    const t = el("table"), head = el("tr");
-    const numeric = w.table.columns.map((_, i) => w.table.rows.length > 0 && w.table.rows.every((r) => !r[i] || isNum(r[i])));
-    w.table.columns.forEach((c, i) => head.append(el("th", numeric[i] ? "num" : "", c)));
-    t.append(head);
-    for (const r of w.table.rows) {
-      const tr = el("tr");
-      w.table.columns.forEach((_, i) => tr.append(el("td", ((numeric[i] ? "num " : "") + toneOf(r[i] || "")).trim(), r[i] ?? "")));
-      t.append(tr);
-    }
-    body.append(t);
-  }
-  if (w.items?.length) {
-    const list = el("div", "items");
-    for (const it of w.items) {
-      const row = el("div", "it"), right = el("div");
-      right.append(el("div", "", it.title));
-      if (it.detail) right.append(el("div", "d", it.detail));
-      row.append(el("div", "w", it.when || ""), right);
-      list.append(row);
-    }
-    body.append(list);
-  }
-  if (w.text) body.append(el("div", "wtext", w.text));
-  if (w.graph?.nodes?.length) {
-    box.classList.add("wide");
-    const cv = el("canvas", "wgraph");
-    body.append(cv);
-    requestAnimationFrame(() => new JarvisGraph(cv, w.graph));
-  }
+  const grid = el("div", "pgrid");
+  grid.style.gridTemplateColumns = `repeat(${w.columns || 1}, minmax(0, 1fr))`;
+  for (const pn of w.panels || []) grid.append(renderPanel(pn, size));
+  if (!(w.panels || []).length) grid.append(el("div", "empty", "Nothing to show."));
+  body.append(grid);
   if (w.note) body.append(el("div", "note", w.note));
   box.append(bar, body);
   if (!fresh) { box.style.animation = "none"; void box.offsetWidth; box.style.animation = ""; }

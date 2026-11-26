@@ -18,8 +18,34 @@ PORTFOLIO = {
 def test_window_is_cleaned_to_known_plain_fields():
     w = clean_window({**PORTFOLIO, "html": "<script>x</script>", "stats": [{"label": "a", "value": 5, "tone": "evil"}]})
     assert "html" not in w
-    assert w["stats"] == [{"label": "a", "value": "5", "tone": "neutral"}]
-    assert w["table"]["rows"][1] == ["TSLA", "5", "-$40"]
+    kinds = [p["type"] for p in w["panels"]]
+    assert kinds == ["stats", "table"]  # old single-section fields become panels
+    assert w["panels"][0]["stats"] == [{"label": "a", "value": "5", "tone": "neutral"}]
+    assert w["panels"][1]["table"]["rows"][1] == ["TSLA", "5", "-$40"]
+    assert w["size"] == "medium" and w["columns"] == 1
+
+
+def test_panels_charts_and_sizes():
+    w = clean_window({"title": "P&L", "size": "full", "columns": 9, "panels": [
+        {"type": "chart", "title": "Daily P&L", "span": 2,
+         "chart": {"kind": "bar", "x": ["Mon", "Tue"], "series": [{"name": "P&L", "values": [120, "-$40", "oops"]}], "unit": "$"}},
+        {"type": "chart", "chart": {"kind": "pie", "series": [{"values": [60, 40]}]}},
+        {"type": "chart", "chart": {"kind": "radar", "series": [{"values": [1]}]}},   # unknown kind: dropped
+        {"type": "chart", "chart": {"kind": "line", "series": [{"values": ["x", None]}]}},  # no numbers: dropped
+        {"type": "text", "text": "Mostly flat."},
+        {"type": "nope"},
+    ]})
+    assert w["size"] == "full" and w["columns"] == 3
+    assert [p["type"] for p in w["panels"]] == ["chart", "chart", "text"]
+    bar = w["panels"][0]
+    assert bar["span"] == 2 and bar["title"] == "Daily P&L"
+    assert bar["chart"]["series"][0]["values"] == [120.0, -40.0, None]
+    assert bar["chart"]["x"] == ["Mon", "Tue", "3"]  # labels padded to the values
+    assert w["panels"][1]["chart"]["x"] == ["1", "2"]
+
+
+def test_graph_or_chart_defaults_to_large():
+    assert clean_window({"title": "g", "graph": {"nodes": [{"id": "a", "label": "A"}]}})["size"] == "large"
 
 
 def test_board_opens_replaces_closes_and_caps():

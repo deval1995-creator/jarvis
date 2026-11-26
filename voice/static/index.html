@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jarvis voice</title>
+<style>
+  :root { color-scheme: light dark; --bg: #101214; --panel: #1a1d21; --text: #e8e6e3; --muted: #9aa0a6;
+          --line: #2c3036; --accent: #4f8cff; --good: #3fb950; --warn: #d29922; --bad: #f85149; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f6f7f9; --panel: #fff; --text: #1d1f23; --muted: #5f6368; --line: #dde1e6; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  select, button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line);
+                   border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  #talk { display: block; width: 100%; margin: 20px 0 8px; padding: 36px 16px; font-size: 18px; font-weight: 600;
+          border-radius: 16px; user-select: none; touch-action: none; }
+  #talk.held { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .state { display: flex; align-items: center; gap: 10px; margin: 16px 0; font-weight: 600; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--muted); }
+  .dot.listening { background: var(--accent); }
+  .dot.thinking { background: var(--warn); animation: pulse 1s infinite; }
+  .dot.speaking { background: var(--good); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin-top: 16px; }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  td { padding: 3px 0; border-bottom: 1px solid var(--line); }
+  td:last-child { text-align: right; }
+  tr:last-child td { border-bottom: 0; }
+  .ok { color: var(--good); } .slow { color: var(--bad); }
+  #log { max-height: 220px; overflow-y: auto; font-size: 13px; color: var(--muted); }
+  #log div { padding: 2px 0; }
+  .hint { color: var(--muted); font-size: 13px; }
+  kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Jarvis voice</h1>
+  <p class="sub">Test page until the desktop app. Replies and approval cards also appear on the
+    <a href="http://127.0.0.1:8765/" target="_blank">chat page</a>.</p>
+
+  <div class="row">
+    <select id="mode">
+      <option value="ptt">Push-to-talk</option>
+      <option value="hands-free">Hands-free</option>
+    </select>
+    <button id="connect">Connect</button>
+    <label class="hint"><input type="checkbox" id="tick" checked> thinking sound</label>
+  </div>
+
+  <button id="talk" disabled>Hold to talk (or hold <kbd>Space</kbd>)</button>
+  <p class="hint" id="modehint">Press talk while Jarvis speaks to cut it off.</p>
+
+  <div class="state"><span class="dot" id="dot"></span><span id="state">Not connected</span></div>
+
+  <div class="panel">
+    <h2>Last turn (ms, from the end of your speech)</h2>
+    <table id="timings">
+      <tr><td>Turn detected</td><td id="t-detect">–</td></tr>
+      <tr><td>Transcribed</td><td id="t-transcribe">–</td></tr>
+      <tr><td>Claude's first text (from sending)</td><td id="t-first_token">–</td></tr>
+      <tr><td>First audio (target 2500)</td><td id="t-first_audio">–</td></tr>
+      <tr><td>Reply finished</td><td id="t-total">–</td></tr>
+      <tr><td>Interruption: server stopped audio</td><td id="t-interrupt_stop">–</td></tr>
+      <tr><td>Interruption: audio stopped here (target 300)</td><td id="t-heard_stop">–</td></tr>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>Log</h2>
+    <div id="log"></div>
+  </div>
+  <audio id="audio" autoplay></audio>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let pc = null, dc = null, ping = null, held = false, mic = null;
+const STATES = { idle: "Ready", listening: "Listening", thinking: "Thinking", speaking: "Speaking" };
+
+function log(text) {
+  const d = document.createElement("div");
+  d.textContent = new Date().toLocaleTimeString() + "  " + text;
+  $("log").prepend(d);
+}
+
+function setState(state, label) {
+  $("dot").className = "dot " + state;
+  $("state").textContent = label || STATES[state] || state;
+  thinking(state === "thinking");
+}
+
+// A soft tick while Claude is thinking, so silence doesn't feel like a hang.
+let audioCtx = null, tickTimer = null;
+function thinking(on) {
+  clearInterval(tickTimer); tickTimer = null;
+  if (!on || !$("tick").checked) return;
+  audioCtx = audioCtx || new AudioContext();
+  const tick = () => {
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain(), t = audioCtx.currentTime;
+    o.frequency.value = 880; g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.05, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+    o.connect(g).connect(audioCtx.destination); o.start(t); o.stop(t + 0.13);
+  };
+  tick(); tickTimer = setInterval(tick, 900);
+}
+
+function showTimings(t) {
+  for (const k of ["detect", "transcribe", "first_token", "first_audio", "total", "interrupt_stop"]) {
+    if (!(k in t)) continue;
+    const cell = $("t-" + k);
+    cell.textContent = t[k];
+    const limit = { first_audio: 2500 }[k];
+    cell.className = limit ? (t[k] <= limit ? "ok" : "slow") : "";
+  }
+  if ("interrupt_stop" in t) {
+    for (const k of ["detect", "transcribe", "first_token", "first_audio", "total"]) { $("t-" + k).textContent = "–"; $("t-" + k).className = ""; }
+  } else {
+    $("t-interrupt_stop").textContent = "–"; $("t-interrupt_stop").className = "";
+  }
+}
+
+function onMessage(raw) {
+  let m; try { m = JSON.parse(raw); } catch { return; }
+  if (m.type === "signalling") { if (m.message?.type === "peerLeft") disconnect(); return; }
+  if (!m.jarvis) return;
+  if (m.type === "state") {
+    if (m.state === "listening" && speaking && $("mode").value !== "ptt") measureStop();  // talked over Jarvis
+    speaking = m.state === "speaking"; setState(m.state);
+  }
+  else if (m.type === "timings") { showTimings(m); log("timings " + JSON.stringify(m).replace(/"jarvis":true,|"type":"timings",/g, "")); }
+  else if (m.type === "heard") log("heard: " + m.text);
+  else if (m.type === "tool") log("using " + m.name.replace(/^mcp__(claude_ai_)?/, ""));
+  else if (m.type === "approval_request") log("approval card waiting on the chat page: " + m.tool.replace(/^mcp__claude_ai_/, ""));
+  else if (m.type === "core_turn" && m.status !== "done") log("core turn " + m.status);
+  else if (m.type === "core_disconnected") log("lost the Core; retrying");
+}
+
+// How long Jarvis's voice keeps going after you press talk, as heard here.
+let analyser = null, speaking = false;
+function measureStop() {
+  if (!analyser) return;
+  const t0 = performance.now(), buf = new Float32Array(analyser.fftSize);
+  let quietSince = null;
+  const timer = setInterval(() => {
+    analyser.getFloatTimeDomainData(buf);
+    const rms = Math.sqrt(buf.reduce((a, x) => a + x * x, 0) / buf.length);
+    const now = performance.now();
+    if (rms > 0.01) quietSince = null; else if (quietSince === null) quietSince = now;
+    if (quietSince !== null && now - quietSince > 150) {
+      clearInterval(timer);
+      const ms = Math.round(quietSince - t0);
+      $("t-heard_stop").textContent = ms; $("t-heard_stop").className = ms <= 300 ? "ok" : "slow";
+      log("interruption: audio stopped " + ms + " ms after the press");
+    } else if (now - t0 > 5000) clearInterval(timer);
+  }, 10);
+}
+
+function send(obj) { if (dc && dc.readyState === "open") dc.send(JSON.stringify(obj)); }
+
+function press(down) {
+  if (!pc || $("mode").value !== "ptt" || down === held) return;
+  held = down;
+  if (down && speaking) measureStop();
+  $("talk").classList.toggle("held", down);
+  send({ type: "ptt", down });
+}
+
+async function connect() {
+  $("connect").disabled = true;
+  setState("", "Connecting…");
+  try {
+    mic = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    pc = new RTCPeerConnection();
+    pc.addTransceiver(mic.getAudioTracks()[0], { direction: "sendrecv" });
+    pc.addTransceiver("video", { direction: "sendrecv" });  // the server expects these slots
+    pc.addTransceiver("video", { direction: "sendrecv" });
+    pc.ontrack = (e) => {
+      if (e.track.kind !== "audio") return;
+      const stream = new MediaStream([e.track]);
+      $("audio").srcObject = stream;
+      audioCtx = audioCtx || new AudioContext();
+      analyser = audioCtx.createAnalyser(); analyser.fftSize = 512;
+      audioCtx.createMediaStreamSource(stream).connect(analyser);
+    };
+    pc.onconnectionstatechange = () => {
+      if (["failed", "closed", "disconnected"].includes(pc?.connectionState)) disconnect();
+    };
+    dc = pc.createDataChannel("chat", { ordered: true });
+    dc.onmessage = (e) => onMessage(e.data);
+    dc.onopen = () => {
+      ping = setInterval(() => dc.readyState === "open" && dc.send("ping: " + Date.now()), 1000);
+      setState("idle");
+      $("talk").disabled = $("mode").value !== "ptt";
+      $("connect").textContent = "Disconnect"; $("connect").disabled = false;
+      $("mode").disabled = true;
+      log("connected (" + $("mode").selectedOptions[0].text + ")");
+    };
+    await pc.setLocalDescription(await pc.createOffer());
+    await new Promise((resolve) => {
+      if (pc.iceGatheringState === "complete") return resolve();
+      pc.onicegatheringstatechange = () => pc.iceGatheringState === "complete" && resolve();
+      setTimeout(resolve, 2000);
+    });
+    const r = await fetch("/api/offer", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type,
+                             request_data: { mode: $("mode").value } }),
+    });
+    if (!r.ok) throw new Error("offer refused: " + r.status + " " + await r.text());
+    await pc.setRemoteDescription(await r.json());
+  } catch (e) {
+    log("could not connect: " + e.message);
+    disconnect();
+  }
+}
+
+function disconnect() {
+  clearInterval(ping); ping = null;
+  if (held) press(false);
+  try { dc?.close(); } catch {}
+  try { pc?.close(); } catch {}
+  mic?.getTracks().forEach((t) => t.stop());
+  pc = dc = mic = null;
+  $("talk").disabled = true; $("mode").disabled = false;
+  $("connect").textContent = "Connect"; $("connect").disabled = false;
+  setState("", "Not connected");
+}
+
+$("connect").onclick = () => (pc ? disconnect() : connect());
+$("mode").onchange = () => {
+  $("modehint").textContent = $("mode").value === "ptt"
+    ? "Press talk while Jarvis speaks to cut it off."
+    : "Just talk. Talk over Jarvis to cut it off. Try it on speakers: if Jarvis cuts itself off, the echo test failed; use a headset.";
+};
+const talk = $("talk");
+talk.addEventListener("pointerdown", (e) => { talk.setPointerCapture(e.pointerId); press(true); });
+talk.addEventListener("pointerup", () => press(false));
+talk.addEventListener("pointercancel", () => press(false));
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Space" && !e.repeat && e.target.tagName !== "SELECT") { e.preventDefault(); press(true); }
+});
+document.addEventListener("keyup", (e) => { if (e.code === "Space") { e.preventDefault(); press(false); } });
+window.addEventListener("blur", () => press(false));
+</script>
+</body>
+</html>

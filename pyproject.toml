@@ -10,7 +10,18 @@ dependencies = [
     "uvicorn[standard]>=0.54.0",
 ]
 
+
 [dependency-groups]
+# The voice service's packages (Pipecat, faster-whisper, Kokoro, CUDA wheels).
+voice = [
+    "nvidia-cublas-cu12==12.8.4.1",
+    "nvidia-cuda-runtime-cu12==12.8.90",
+    "nvidia-cudnn-cu12>=9,<10",
+    "nvidia-cufft-cu12>=11.4.1.4",
+    "nvidia-curand-cu12>=10.3.10.19",
+    "onnxruntime-gpu>=1.22,<1.24",
+    "pipecat-ai[kokoro,local-smart-turn,silero,webrtc,whisper]>=1.17.0",
+]
 dev = [
     "httpx>=0.28.1",
     "pytest>=9.2.0",
@@ -19,3 +30,9 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.uv]
+default-groups = ["dev", "voice"]
+# The GPU build of ONNX Runtime replaces the CPU one (same module name), so
+# Kokoro can speak from the GPU. The CPU build would overwrite its files.
+override-dependencies = ["onnxruntime ; sys_platform == 'never'"]

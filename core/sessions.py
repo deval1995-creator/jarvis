@@ -17,6 +17,13 @@ from core import db, store
 from core.backend import Backend, TurnResult
 
 SOURCES = ("typed", "voice", "routine", "discord")
+# Spoken messages are tagged for Claude (not in the stored history), so the reply
+# is written to be heard: the persona says what the tag means.
+VOICE_TAG = "[voice] "
+
+
+def prompt_for(text: str, source: str) -> str:
+    return VOICE_TAG + text if source == "voice" else text
 
 BackendFactory = Callable[[str | None], Backend]
 
@@ -98,7 +105,7 @@ class SessionManager:
         result: TurnResult | None = None
         error: str | None = None
         try:
-            async for kind, payload in self.backend.turn(text):
+            async for kind, payload in self.backend.turn(prompt_for(text, source)):
                 if kind == "delta":
                     if first_token_ms is None:
                         first_token_ms = int((time.perf_counter() - start) * 1000)

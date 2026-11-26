@@ -12,7 +12,9 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     port = int(os.environ.get("JARVIS_PORT", DEFAULT_PORT))
     # 127.0.0.1 only: never listen on the network.
-    uvicorn.run(create_app(port=port), host="127.0.0.1", port=port, log_level="info")
+    # JARVIS_CONNECTORS=0: no claude.ai connectors (slim sessions, e.g. for test runs).
+    connectors = os.environ.get("JARVIS_CONNECTORS", "1") != "0"
+    uvicorn.run(create_app(port=port, connectors=connectors), host="127.0.0.1", port=port, log_level="info")
 
 
 if __name__ == "__main__":

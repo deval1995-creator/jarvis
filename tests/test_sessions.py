@@ -96,3 +96,22 @@ def test_rejects_bad_input(conn):
         asyncio.run(collect(m.process_message("   ")))
     with pytest.raises(ValueError):
         asyncio.run(collect(m.process_message("hi", "telepathy")))
+
+
+def test_voice_messages_are_tagged_for_claude_only(tmp_path):
+    from core import db, store
+    from core.sessions import SessionManager
+
+    conn = db.connect(tmp_path / "jarvis.db")
+    m = SessionManager(conn, FakeBackend)
+
+    async def run():
+        async for _ in m.process_message("What's on today?", "voice"):
+            pass
+        async for _ in m.process_message("And tomorrow?", "typed"):
+            pass
+
+    asyncio.run(run())
+    assert m.backend.prompts == ["[voice] What's on today?", "And tomorrow?"]
+    saved = [msg["content"] for msg in store.get_conversation(conn, m.conversation_id)["messages"] if msg["role"] == "user"]
+    assert saved == ["What's on today?", "And tomorrow?"]

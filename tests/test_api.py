@@ -123,9 +123,7 @@ def test_idle_conversation_gets_reviewed(tmp_path):
     conn.close()
 
 
-def test_quick_ask_page_and_voice_script(client):
-    page = client.get("/quick")
-    assert page.status_code == 200 and "Ask Jarvis" in page.text and "__JARVIS_TOKEN__" not in page.text
+def test_page_scripts(client):
     js = client.get("/static/voice.js")
     assert js.status_code == 200 and "jarvisVoice" in js.text and client.get("/static/orb.js").status_code == 200 and client.get("/static/nope.js").status_code == 404
     assert js.headers["content-type"].startswith("text/javascript")

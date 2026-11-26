@@ -264,11 +264,6 @@ def create_app(
     async def index() -> str:
         return page("index.html")
 
-    @app.get("/quick", response_class=HTMLResponse)
-    async def quick() -> str:
-        """The small ask box the desktop app's hotkey opens."""
-        return page("quick.html")
-
     SCRIPTS = {"voice.js", "orb.js"}
 
     @app.get("/static/{name}")

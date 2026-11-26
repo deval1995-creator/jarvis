@@ -524,17 +524,14 @@ $("stop").onclick = stop;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") stop(); });
 $("newchat").onclick = () => api("/api/conversations/new", { method: "POST" });
 
-// ---------- pop-ups (the browser's own, or the desktop app's) ----------
-const tauri = window.__TAURI__;
+// ---------- pop-ups (the browser's notifications, when this tab isn't in front) ----------
 const host = {
   notify(title, body) {
     if (!document.hidden && document.hasFocus()) return;
-    if (tauri) tauri.core.invoke("notify", { title, body }).catch(() => {});
-    else if (window.Notification && Notification.permission === "granted") new Notification(title, { body });
+    if (window.Notification && Notification.permission === "granted") new Notification(title, { body });
   },
-  mic(state) { if (tauri) tauri.core.invoke("mic_state", { state }).catch(() => {}); },
 };
-if (!tauri && window.Notification && Notification.permission === "default")
+if (window.Notification && Notification.permission === "default")
   document.addEventListener("click", () => Notification.requestPermission(), { once: true });
 
 // ---------- voice ----------
@@ -549,7 +546,7 @@ voice.on("mic", (m) => {
   $("vmode").value = m === "off" && voice.state === "connecting" ? voice.mode : m;
   $("chip-mic").textContent = m === "off" ? "MIC OFF" : m === "ptt" ? "MIC · PUSH-TO-TALK" : "MIC · HANDS-FREE";
   $("chip-mic").className = "chip" + (m === "off" ? "" : " on");
-  host.mic(m); renderSystems();
+  renderSystems();
 });
 voice.on("timings", (t) => {
   if ("heard_stop" in t) lastVoice.interrupt = t.heard_stop;
@@ -570,11 +567,6 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("keyup", (e) => { if (e.code === "Space" && !typing(e)) release(); });
 window.addEventListener("blur", release);
 if (voice.wantsOn && localStorage.getItem("voiceMode")) voice.connect();
-window.jarvis = {
-  ptt: (down) => { voice.ptt(down); talk.classList.toggle("held", down); },
-  toggleMute: () => voice.toggleMute(),
-  focusInput: () => input.focus(),
-};
 
 setInterval(loadStatus, 30000);
 renderSystems(); renderNumbers();

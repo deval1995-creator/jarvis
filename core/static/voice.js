@@ -1,6 +1,5 @@
 // Jarvis voice client: connects this page's mic and speaker to the voice service
-// (WebRTC), push-to-talk or hands-free. Used by the chat page, which the desktop
-// app shows; the app drives it through window.jarvisVoice (hotkeys, tray mute).
+// (WebRTC), push-to-talk or hands-free. Used by the chat page.
 (() => {
   const VOICE_URL = "http://127.0.0.1:8766";
   const listeners = { state: [], timings: [], log: [], mic: [] };

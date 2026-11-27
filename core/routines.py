@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from core import db, desk_compare, news, tradingview
+from core import db, news, tradingview
 from core.scheduler import ET, Routine, is_market_day
 
 log = logging.getLogger(__name__)
@@ -92,8 +92,6 @@ def make_routines(ctx: RoutineContext) -> tuple[list[Routine], list]:
 
     async def premarket_zones() -> dict:
         r = await tradingview.mark_zones()
-        if ctx.conn is not None:
-            desk_compare.save_day(ctx.conn, r)  # compared with the desk agent's at 09:40
         near = lambda zs: f"{zs[0]['lo']:.2f} to {zs[0]['hi']:.2f}" if zs else "none"
         nearest = lambda zs: f"{zs[0]['name']} {zs[0]['lo']:.2f}–{zs[0]['hi']:.2f}" if zs else "none"
         later = []
@@ -107,13 +105,6 @@ def make_routines(ctx: RoutineContext) -> tuple[list[Routine], list]:
                   + (" Still to come: " + "; ".join(_say_event(e) for e in later) + "." if later else ""))
         await ctx.announce("QQQ zones", text, speak=spoken)
         return {"summary": text + f" ({r['drawn']} zones on {r.get('layout') or 'the chart'})", **r}
-
-    async def desk_check() -> dict:
-        day = datetime.now(ET).date().isoformat()
-        c = desk_compare.compare_day(ctx.conn, day)
-        if c["status"] == "differs":
-            await ctx.announce("Zones vs desk agent", c["summary"], level="warn", speak=False)
-        return c
 
     # ---- heads-up before each release (checked every scheduler tick) ----
     def _alerted_load(day: str) -> list[str]:
@@ -158,9 +149,5 @@ def make_routines(ctx: RoutineContext) -> tuple[list[Routine], list]:
                 catch_up_minutes=60, retries=2, retry_minutes=3, run=premarket_zones,
                 description="Fresh QQQ 15-min zones on Main's QQQ chart, then the nearest levels and the releases "
                             "still to come, spoken (09:27 ET: just after the Tempo desk's 09:25 run)."),
-        Routine(name="desk_compare", title="Zones vs desk agent", at="09:40", days="market",
-                catch_up_minutes=360, retries=0, run=desk_check,
-                description="Switch-over check: do Jarvis's zones match the Tempo desk agent's this morning? "
-                            "(read-only; flags differences)"),
     ]
     return routines, [heads_up_watcher]

@@ -205,6 +205,10 @@ MIGRATIONS: list[str] = [
     """
     drop table zone_results;
     """,
+    # v11: the desk-agent comparison removed; nothing records the morning zones any more.
+    """
+    drop table zone_days;
+    """,
 ]
 
 

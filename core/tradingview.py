@@ -34,8 +34,10 @@ LEVEL_RE = r"^J· "
 CDP_PORT = 9222
 NO_WINDOW, DETACHED, NEW_GROUP, BREAKAWAY = 0x08000000, 0x00000008, 0x00000200, 0x01000000
 
-ZONES_CONFIG = {  # the Tempo desk's config/zones.config.json
-    "symbol": "NASDAQ:QQQ", "timeframe": "15", "bars": 500,
+# Jarvis draws only on the chart showing `symbol` in the layout `layout`; it never changes
+# a chart's symbol or touches other layouts.
+ZONES_CONFIG = {  # the Tempo desk's config/zones.config.json, plus the layout
+    "layout": os.environ.get("JARVIS_TV_LAYOUT", "Main"), "symbol": "NASDAQ:QQQ", "timeframe": "15", "bars": 500,
     "lookback_days": 5, "half_life_days": 1.5, "per_side": 4, "min_per_side": 3, "max_width_atr": 0.6,
     "max_width_pct": 0.0015, "pivot_bars": 3, "min_gap_atr": 0.75, "max_distance_atr": 10,
     "colors": {"resistance": "239,83,80", "support": "38,166,154", "fill": 0.22, "border": 0.8},
@@ -144,13 +146,23 @@ def _launch() -> bool:
     return reopened
 
 
-async def ensure_running(log_cb=None) -> dict:
-    """TradingView up with its debug port and a chart ready; launches it if needed (up to ~2 min)."""
+def _where(cfg: dict | None = None) -> dict:
+    c = {**ZONES_CONFIG, **(cfg or {})}
+    return {"layout": c["layout"], "symbol": c["symbol"]}
+
+
+async def ensure_running(log_cb=None, cfg: dict | None = None) -> dict:
+    """TradingView up with its debug port and the target chart there; launches it if needed (up to ~2 min)."""
+    where = _where(cfg)
     try:
-        st = await bridge("status", timeout=20)
+        st = await bridge("status", where, timeout=20)
         if st.get("symbol"):
             return st
-    except TradingViewError:
+        raise TradingViewError(f"no chart shows {where['symbol']} in layout \"{st.get('layout')}\" "
+                               f"(charts: {', '.join(c['symbol'] for c in st.get('charts', []))}); I won't change a chart's symbol")
+    except TradingViewError as e:
+        if "isn't open" in str(e) or "no chart shows" in str(e):
+            raise  # TradingView is up: wrong layout/chart is for Deval to fix, not a reason to relaunch
         pass
     if log_cb:
         await log_cb("Opening TradingView…")
@@ -161,7 +173,7 @@ async def ensure_running(log_cb=None) -> dict:
     while time.monotonic() < deadline:
         await asyncio.sleep(3)
         try:
-            st = await bridge("status", timeout=20)
+            st = await bridge("status", where, timeout=20)
             if st.get("symbol"):
                 return st
         except TradingViewError:
@@ -173,20 +185,21 @@ async def mark_zones(cfg: dict | None = None, log_cb=None) -> dict:
     """Read QQQ 15-min bars, compute the zones, draw them, and put the chart back."""
     cfg = {**ZONES_CONFIG, **(cfg or {})}
     async with chart_lock():
-        await ensure_running(log_cb)
-        data = await bridge("read", {"symbol": cfg["symbol"], "timeframe": cfg["timeframe"], "count": cfg["bars"]})
+        await ensure_running(log_cb, cfg)
+        data = await bridge("read", {**_where(cfg), "timeframe": cfg["timeframe"], "count": cfg["bars"]})
         try:
             z = zmath.find_zones(data["bars"], **cfg)
             last_t = data["bars"][-1][0]
             boxes = [{**x, "to": last_t} for x in z["resistance"] + z["support"]]
-            drawn = await bridge("draw_zones", {"zones": boxes, "mine_re": ZONE_LABEL_RE, "colors": cfg["colors"]})
+            drawn = await bridge("draw_zones", {**_where(cfg), "zones": boxes, "mine_re": ZONE_LABEL_RE,
+                                                "colors": cfg["colors"]})
         finally:  # leave the chart the way it was, even if something failed
             before = data.get("before") or {}
             try:
-                await bridge("restore", {"timeframe": before.get("timeframe")})
+                await bridge("restore", {**_where(cfg), "timeframe": before.get("timeframe")})
             except TradingViewError as e:
                 log.warning("couldn't restore the chart's timeframe: %s", e)
-    result = {"symbol": data["symbol"], "price": z["price"], "atr": z["atr"], "max_width": z["max_width"],
+    result = {"layout": data.get("layout"), "symbol": data["symbol"], "price": z["price"], "atr": z["atr"], "max_width": z["max_width"],
               "sessions": z["sessions"], "resistance": z["resistance"], "support": z["support"],
               "removed_old": drawn["removed"], "drawn": drawn["drawn"], "bars": len(data["bars"]),
               "chart_left_on": before.get("timeframe"), "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
@@ -205,14 +218,14 @@ async def draw_level(price: float, note: str = "", color: str = "255,181,71") ->
     text = f"{LEVEL_PREFIX}{price:.2f}" + (f" {note.strip()[:40]}" if note.strip() else "")
     async with chart_lock():
         await ensure_running()
-        return await bridge("draw_level", {"price": float(price), "text": text, "color": color})
+        return await bridge("draw_level", {**_where(), "price": float(price), "text": text, "color": color})
 
 
 async def clear_mine(what: str = "all") -> dict:
     pattern = {"zones": ZONE_LABEL_RE, "levels": LEVEL_RE}.get(what, f"(?:{ZONE_LABEL_RE})|(?:{LEVEL_RE})")
     async with chart_lock():
         await ensure_running()
-        return await bridge("clear_mine", {"mine_re": pattern})
+        return await bridge("clear_mine", {"layout": _where()["layout"], "mine_re": pattern})
 
 
 def summary(r: dict) -> str:

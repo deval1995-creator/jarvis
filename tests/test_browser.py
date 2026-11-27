@@ -13,7 +13,9 @@ from core import browser as br
 PAGES = {
     "/": b"""<html><head><title>Home</title></head><body><h1>Cafe Test</h1><p>Open daily 8-6.</p>
              <a href="/menu">Menu</a> <form action="/search"><input name="q" placeholder="Search menu">
-             <button type="submit">Search</button></form><button id="book">Book a table</button></body></html>""",
+             <button type="submit">Search</button></form><button id="book">Book a table</button>
+             <div role="tablist"><button role="tab" onclick="document.getElementById('d').hidden=false">Desserts</button></div>
+             <div id="d" hidden>Mango kulfi 4.99</div></body></html>""",
     "/menu": b"<html><head><title>Menu</title></head><body><p>Latte 4.50</p></body></html>",
 }
 
@@ -116,3 +118,40 @@ def test_browser_actions_go_through_an_approval_card(tmp_path):
         return await gate
 
     assert run(scenario()).behavior == "deny"
+
+
+def test_full_page_screenshot_and_scroll(site):
+    async def go():
+        b = br.Browser(allow_local=True)
+        try:
+            await b.open(site + "/")
+            full = await b.screenshot(full_page=True)
+            part = await b.screenshot(full_page=False)
+            assert full[:2] == part[:2] == b"\xff\xd8"
+            moved = await b.scroll("Book a table")
+            assert "scroll" in moved
+            with pytest.raises(br.BrowserError, match="couldn't find"):
+                await b.scroll("No such text anywhere")
+        finally:
+            await b.close()
+    run(go())
+
+
+def test_reveal_tabs_and_hidden_text_but_not_submits(site):
+    async def go():
+        b = br.Browser(allow_local=True)
+        try:
+            page = await b.open(site + "/")
+            assert "Mango kulfi" not in page["text"]
+            assert "Mango kulfi" in (await b.read(hidden=True))["text"]  # hidden tab text, no click
+            tab = next(e["ref"] for e in page["elements"] if e["text"] == "Desserts")
+            assert "Mango kulfi" in (await b.reveal(tab))["text"]
+            submit = next(e["ref"] for e in (await b.read())["elements"] if e["text"] == "Search")
+            with pytest.raises(br.BrowserError, match="submit a form"):
+                await b.reveal(submit)
+            book = next(e["ref"] for e in (await b.read())["elements"] if e["text"] == "Book a table")
+            with pytest.raises(br.BrowserError, match="approval"):
+                await b.reveal(book)
+        finally:
+            await b.close()
+    run(go())

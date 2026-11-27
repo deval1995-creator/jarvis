@@ -22,7 +22,7 @@ from core import weather as wx
 
 SERVER_NAME = "tools"
 TOOL_NAMES = ["weather", "search", "read_page", "places", "browser_open", "browser_read", "browser_follow",
-              "browser_back", "browser_screenshot", "browser_click", "browser_type"]
+              "browser_back", "browser_scroll", "browser_reveal", "browser_screenshot", "browser_click", "browser_type"]
 # These act on a web page; they go through an approval card (connectors.NEEDS_APPROVAL)
 # rather than being allowed outright.
 APPROVAL_TOOL_NAMES = ["browser_click", "browser_type"]
@@ -156,10 +156,18 @@ def build_tools_server(board=None, browser: br.Browser | None = None):
     async def browser_open(args):
         return await _browse(browser.open(args["url"]))
 
-    @tool("browser_read", "Read more of the open page's text (from a character offset) with fresh element numbers.",
-          {"type": "object", "properties": {"offset": {"type": "integer", "minimum": 0}}})
+    @tool("browser_read", "Read the open page's text (from a character offset) with fresh element numbers. "
+          "hidden=true also includes text in closed tabs and accordions (e.g. a whole tabbed menu at once).",
+          {"type": "object", "properties": {"offset": {"type": "integer", "minimum": 0}, "hidden": {"type": "boolean"}}})
     async def browser_read(args):
-        return await _browse(browser.read(args.get("offset") or 0))
+        return await _browse(browser.read(args.get("offset") or 0, bool(args.get("hidden"))))
+
+    @tool("browser_reveal", "Open a tab, accordion, 'show more' or same-page link on the page by its number, to "
+          "show more of the page. Free: it refuses anything that could submit or send (use browser_click, which "
+          "needs approval, for those).",
+          {"type": "object", "properties": {"ref": {"type": "integer"}}, "required": ["ref"]})
+    async def browser_reveal(args):
+        return await _browse(browser.reveal(args["ref"]))
 
     @tool("browser_follow", "Open a link on the page by its number (links only; it just navigates).",
           {"type": "object", "properties": {"ref": {"type": "integer"}}, "required": ["ref"]})
@@ -170,11 +178,19 @@ def build_tools_server(board=None, browser: br.Browser | None = None):
     async def browser_back(args):
         return await _browse(browser.back())
 
-    @tool("browser_screenshot", "Show Deval a screenshot of the open page in a window on screen.",
-          {"type": "object", "properties": {"caption": {"type": "string"}}})
+    @tool("browser_scroll", "Move the view on the open page: 'down' or 'up' one screen, 'top', 'bottom', or "
+          "text to jump to (e.g. 'Desserts'). Use before a visible-part screenshot of a specific section.",
+          {"type": "object", "properties": {"to": {"type": "string"}}, "required": ["to"]})
+    async def browser_scroll(args):
+        return await _browse(browser.scroll(args.get("to") or "down"))
+
+    @tool("browser_screenshot", "Show Deval a screenshot of the open page in a window on screen. By default "
+          "the whole page top to bottom (Deval scrolls it in the window); visible_only=true shows just the "
+          "part currently in view (after browser_scroll).",
+          {"type": "object", "properties": {"caption": {"type": "string"}, "visible_only": {"type": "boolean"}}})
     async def browser_screenshot(args):
         try:
-            shot = await browser.screenshot()
+            shot = await browser.screenshot(full_page=not args.get("visible_only"))
         except br.BrowserError as e:
             return {"content": [{"type": "text", "text": str(e)}], "is_error": True}
         if board is None:
@@ -219,4 +235,4 @@ def build_tools_server(board=None, browser: br.Browser | None = None):
 
     return create_sdk_mcp_server(name=SERVER_NAME, version="1.0.0", tools=[
         weather, search, read_page, places, browser_open, browser_read, browser_follow, browser_back,
-        browser_screenshot, browser_click, browser_type])
+        browser_scroll, browser_reveal, browser_screenshot, browser_click, browser_type])

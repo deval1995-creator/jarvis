@@ -100,6 +100,7 @@ WEB_TOOLS = ["WebSearch", "WebFetch"]
 # Jarvis's own web tools (Tavily): also text written by strangers.
 OWN_WEB_TOOLS = ["mcp__tools__search", "mcp__tools__read_page", "mcp__tools__browser_open",
                  "mcp__tools__browser_read", "mcp__tools__browser_follow", "mcp__tools__browser_back",
+                 "mcp__tools__browser_scroll", "mcp__tools__browser_reveal",
                  "mcp__tools__browser_click", "mcp__tools__browser_type"]
 # Jarvis's browser acting on a page: one approved call at a time, like sending email.
 OWN_APPROVAL_TOOLS = ["mcp__tools__browser_click", "mcp__tools__browser_type"]

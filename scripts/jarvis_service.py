@@ -67,7 +67,9 @@ def kill_with_me_job():
                     ("PeakJobMemoryUsed", ctypes.c_size_t)]
 
     info = EXTENDED()
-    info.Basic.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    # KILL_ON_JOB_CLOSE, plus BREAKAWAY_OK: apps Jarvis opens for you (TradingView) can leave
+    # the job, so restarting Jarvis never closes them.
+    info.Basic.LimitFlags = 0x2000 | 0x0800
     k32.SetInformationJobObject(ctypes.c_void_p(job), 9, ctypes.byref(info), ctypes.sizeof(info))
     return job
 

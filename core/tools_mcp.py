@@ -16,12 +16,13 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 import base64
 
 from core import browser as br
+from core import tradingview as tvw
 from core import places as gplaces
 from core import tavily
 from core import weather as wx
 
 SERVER_NAME = "tools"
-TOOL_NAMES = ["weather", "search", "read_page", "places", "browser_open", "browser_read", "browser_follow",
+TOOL_NAMES = ["weather", "search", "read_page", "places", "mark_zones", "zones_today", "draw_level", "clear_my_drawings", "browser_open", "browser_read", "browser_follow",
               "browser_back", "browser_scroll", "browser_reveal", "browser_screenshot", "browser_click", "browser_type"]
 # These act on a web page; they go through an approval card (connectors.NEEDS_APPROVAL)
 # rather than being allowed outright.
@@ -136,6 +137,41 @@ def build_tools_server(board=None, browser: br.Browser | None = None):
         except Exception as e:
             return {"content": [{"type": "text", "text": f"Places search unavailable: {e}"}], "is_error": True}
 
+    async def _tv(coro):
+        try:
+            return _ok(await coro)
+        except tvw.TradingViewError as e:
+            return {"content": [{"type": "text", "text": f"TradingView: {e}"}], "is_error": True}
+        except Exception as e:
+            return {"content": [{"type": "text", "text": f"TradingView problem: {str(e)[:200]}"}], "is_error": True}
+
+    @tool("mark_zones", "Mark fresh QQQ 15-minute support/resistance zones on Deval's TradingView chart (R1-R4 above, "
+          "S1-S4 below, from the last 5 sessions plus prior-day and premarket levels; the Tempo desk's method). "
+          "Replaces only Jarvis's previous zone boxes, never Deval's drawings, and puts the chart back on its "
+          "timeframe. Opens TradingView if needed (reopening it if it's open without its debug port). ~5-30 s.",
+          {"type": "object", "properties": {}})
+    async def mark_zones(args):
+        async def note(m):
+            pass
+        return await _tv(tvw.mark_zones(log_cb=note))
+
+    @tool("zones_today", "The zones last marked (levels, why each one, when), without touching TradingView.",
+          {"type": "object", "properties": {}})
+    async def zones_today(args):
+        return _ok(tvw.last_zones() or {"note": "No zones marked yet."})
+
+    @tool("draw_level", "Draw a labelled horizontal line on Deval's TradingView chart (on the symbol it shows), e.g. a "
+          "level Deval mentions. Labelled 'J· <price> <note>' so it's recognisably Jarvis's.",
+          {"type": "object", "properties": {"price": {"type": "number"}, "note": {"type": "string"}}, "required": ["price"]})
+    async def draw_level(args):
+        return await _tv(tvw.draw_level(args["price"], args.get("note") or ""))
+
+    @tool("clear_my_drawings", "Remove Jarvis's own drawings from the chart: 'zones', 'levels' or 'all'. Never removes "
+          "Deval's own drawings.",
+          {"type": "object", "properties": {"what": {"type": "string", "enum": ["zones", "levels", "all"]}}})
+    async def clear_my_drawings(args):
+        return await _tv(tvw.clear_mine(args.get("what") or "all"))
+
     async def _browse(coro):
         try:
             return _ok(await coro)
@@ -234,5 +270,5 @@ def build_tools_server(board=None, browser: br.Browser | None = None):
         return await _browse(browser.type(args["ref"], args["text"], bool(args.get("submit"))))
 
     return create_sdk_mcp_server(name=SERVER_NAME, version="1.0.0", tools=[
-        weather, search, read_page, places, browser_open, browser_read, browser_follow, browser_back,
+        weather, search, read_page, places, mark_zones, zones_today, draw_level, clear_my_drawings, browser_open, browser_read, browser_follow, browser_back,
         browser_scroll, browser_reveal, browser_screenshot, browser_click, browser_type])

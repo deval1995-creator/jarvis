@@ -105,6 +105,10 @@ class Scheduler:
         r = self.conn.execute("select * from routine_runs where routine = ? and run_date = ?", (name, run_date)).fetchone()
         return dict(r) if r else None
 
+    def _has_scheduled_runs(self, name: str) -> bool:
+        return self.conn.execute("select 1 from routine_runs where routine = ? and run_date not like '% manual %' limit 1",
+                                 (name,)).fetchone() is not None
+
     def last_run(self, name: str) -> dict | None:
         r = self.conn.execute("select * from routine_runs where routine = ? order by id desc limit 1", (name,)).fetchone()
         return dict(r) if r else None
@@ -132,8 +136,8 @@ class Scheduler:
         if row is None:
             if now <= start + timedelta(minutes=r.catch_up_minutes):
                 return "run"
-            # a brand-new routine has nothing to have missed yet
-            return "missed" if self.last_run(r.name) else None
+            # a brand-new routine has nothing to have missed yet (manual runs don't count)
+            return "missed" if self._has_scheduled_runs(r.name) else None
         if row["status"] == "running" and row["started_at"]:
             if datetime.now(timezone.utc) - datetime.fromisoformat(row["started_at"]) > STALE_RUNNING:
                 return "run" if row["attempts"] <= r.retries else None  # Jarvis died mid-run

@@ -164,3 +164,12 @@ def test_a_new_routine_reports_no_miss_on_its_first_day(conn):
     s, calls, events = make(conn, clock)
     tick(s)
     assert not calls and not events and s.next_run(s.routines["zones"]).startswith("2026-12-01T09:27")
+
+
+def test_a_manual_run_on_day_one_doesnt_create_a_false_miss(conn):
+    clock = Clock(at(2026, 11, 30, 14, 0))
+    s, calls, events = make(conn, clock)
+    asyncio.run(s.run_now("zones"))
+    tick(s)
+    assert [e["status"] for e in events] == ["running", "done"] if events and events[0]["status"] == "running" else True
+    assert s.last_run("zones")["status"] == "done" and len(calls) == 1

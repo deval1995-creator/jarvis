@@ -37,7 +37,7 @@ NO_WINDOW, DETACHED, NEW_GROUP, BREAKAWAY = 0x08000000, 0x00000008, 0x00000200, 
 # Jarvis draws only on the chart showing `symbol` in the layout `layout`; it never changes
 # a chart's symbol or touches other layouts.
 ZONES_CONFIG = {  # the Tempo desk's config/zones.config.json, plus the layout
-    "layout": os.environ.get("JARVIS_TV_LAYOUT", "Main"), "symbol": "NASDAQ:QQQ", "timeframe": "15", "bars": 500,
+    "layout": os.environ.get("JARVIS_TV_LAYOUT", "Main"), "symbol": "NASDAQ:QQQ", "timeframe": "15", "bars": 700,
     "lookback_days": 5, "half_life_days": 1.5, "per_side": 4, "min_per_side": 3, "max_width_atr": 0.6,
     "max_width_pct": 0.0015, "pivot_bars": 3, "min_gap_atr": 0.75, "max_distance_atr": 10,
     "colors": {"resistance": "239,83,80", "support": "38,166,154", "fill": 0.22, "border": 0.8},

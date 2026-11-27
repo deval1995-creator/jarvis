@@ -52,7 +52,7 @@ def test_session_options_with_connectors():
     assert "mcp__claude_ai_Gmail__send_message" not in o.allowed_tools
     assert "mcp__claude_ai_Gmail__send_message" not in o.disallowed_tools
     assert o.can_use_tool is connectors.deny_unlisted
-    assert o.tools == []  # no files, shell or web
+    assert o.tools == ["WebSearch", "WebFetch"]  # web only: no files, shell or code
 
 
 def test_session_options_without_connectors_stays_slim():
@@ -210,3 +210,9 @@ def test_ensure_connected_is_one_call_when_healthy():
     client.get_mcp_status = counting
     asyncio.run(connectors.ensure_connected(client))
     assert calls == 1 and not client.toggles and not client.reconnects
+
+
+def test_web_reads_mark_the_conversation():
+    assert connectors.reads_outside_content("WebSearch") and connectors.reads_outside_content("WebFetch")
+    o = session_options(connectors=False)
+    assert "WebSearch" in o.allowed_tools and "Bash" not in o.tools

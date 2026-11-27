@@ -27,6 +27,7 @@ from claude_agent_sdk import (
 )
 
 from core import db
+from core.connectors import WEB_TOOLS
 
 log = logging.getLogger(__name__)
 
@@ -96,9 +97,10 @@ def session_options(
     options = ClaudeAgentOptions(
         cwd=str(prepare_agent_home()),
         setting_sources=["project"],  # loads the persona copied from jarvis_home/CLAUDE.md
-        tools=[],
+        # Built-in tools: only web search and page reading. No files, shell or code.
+        tools=list(WEB_TOOLS),
         mcp_servers=mcp_servers or {},
-        allowed_tools=list(allowed_tools or []),
+        allowed_tools=list(allowed_tools or []) + list(WEB_TOOLS),
         include_partial_messages=True,
         resume=resume,
     )

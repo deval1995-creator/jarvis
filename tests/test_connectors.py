@@ -171,3 +171,42 @@ def test_wait_for_servers_waits_for_late_connectors():
     names = {s["name"] for s in servers}
     assert {"claude.ai Gmail", "claude.ai Google Calendar", "claude.ai Interactive Brokers (IBKR)"} <= names
     assert all(s["status"] != "pending" for s in servers) and client.calls >= 5
+
+
+class BrokenClient(FakeClient):
+    def __init__(self, servers):
+        super().__init__(servers)
+        self.reconnects = []
+
+    async def reconnect_mcp_server(self, name):
+        self.reconnects.append(name)
+        self.servers[name] = "connected"
+
+
+def test_ensure_connected_repairs_what_it_can():
+    client = BrokenClient([
+        ("claude.ai Gmail", "failed"),
+        ("claude.ai Google Calendar", "disabled"),
+        ("claude.ai Interactive Brokers (IBKR)", "needs-auth"),
+        ("memory", "connected"),
+    ])
+    status = asyncio.run(connectors.ensure_connected(client, settle=0.5))
+    assert client.reconnects == ["claude.ai Gmail"]
+    assert ("claude.ai Google Calendar", True) in client.toggles
+    assert status["claude.ai Gmail"] == status["claude.ai Google Calendar"] == "connected"
+    assert status["claude.ai Interactive Brokers (IBKR)"] == "needs-auth"  # Deval has to sign in
+
+
+def test_ensure_connected_is_one_call_when_healthy():
+    client = BrokenClient([(n, "connected") for n in connectors.ALLOWED_SERVERS])
+    calls = 0
+    real = client.get_mcp_status
+
+    async def counting():
+        nonlocal calls
+        calls += 1
+        return await real()
+
+    client.get_mcp_status = counting
+    asyncio.run(connectors.ensure_connected(client))
+    assert calls == 1 and not client.toggles and not client.reconnects

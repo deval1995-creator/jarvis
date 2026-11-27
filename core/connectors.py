@@ -146,3 +146,41 @@ async def select_servers(client) -> dict[str, str]:
         elif wanted and status == "disabled":
             await client.toggle_mcp_server(name, True)
     return {s["name"]: s.get("status") for s in (await client.get_mcp_status()).get("mcpServers", [])}
+
+
+# Statuses Jarvis can repair by itself; "needs-auth" needs Deval to sign in again.
+REPAIRABLE = {"disabled", "failed", "disconnected", "error"}
+
+
+async def ensure_connected(client, settle: float = 15.0) -> dict[str, str]:
+    """Make sure every connector Jarvis uses is connected in this session.
+
+    Missing or still loading: wait for it. Switched off: switch it on. Failed or
+    dropped: reconnect it. Returns {server: status} afterwards; anything still
+    not "connected" (e.g. needs-auth) is logged.
+    """
+    status = {s["name"]: s.get("status") for s in (await client.get_mcp_status()).get("mcpServers", [])}
+    if all(status.get(n) == "connected" for n in ALLOWED_SERVERS):
+        return status  # the usual case: one quick local call
+    for name in sorted(ALLOWED_SERVERS):
+        st = status.get(name)
+        try:
+            if st == "disabled":
+                log.info("connector %s was switched off; switching it on", name)
+                await client.toggle_mcp_server(name, True)
+            elif st in REPAIRABLE:
+                log.info("connector %s is %s; reconnecting", name, st)
+                await client.reconnect_mcp_server(name)
+        except Exception:
+            log.exception("could not repair connector %s", name)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + settle
+    while loop.time() < deadline:  # missing ones may still be loading
+        status = {s["name"]: s.get("status") for s in (await client.get_mcp_status()).get("mcpServers", [])}
+        if all(status.get(n) not in (None, "pending") for n in ALLOWED_SERVERS):
+            break
+        await asyncio.sleep(0.5)
+    bad = {n: status.get(n, "missing") for n in ALLOWED_SERVERS if status.get(n) != "connected"}
+    if bad:
+        log.warning("connectors not available: %s", bad)
+    return status

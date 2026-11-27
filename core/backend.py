@@ -206,8 +206,25 @@ class SDKBackend:
             await client.connect()
         return client
 
+    async def check_connectors(self) -> dict[str, str] | None:
+        """Repair any connector that dropped out of the live session (see
+        connectors.ensure_connected). Cheap when all is well."""
+        if not self._connectors or self._client is None:
+            return self.connector_status
+        from core import connectors as conn_policy
+
+        async with self._connect_lock:
+            if self._client is not None:
+                self.connector_status = await conn_policy.ensure_connected(self._client)
+        return self.connector_status
+
     async def turn(self, text: str) -> AsyncIterator[TurnEvent]:
         client = await self._ensure_client()
+        if self._connectors:
+            try:  # every message starts with Gmail, Calendar and IBKR present
+                await self.check_connectors()
+            except Exception:
+                log.exception("connector check failed; continuing with what's loaded")
         streamed = False  # any text streamed this turn
         need_break = False  # text resumes after a tool call: start a new paragraph
         saw_events = False

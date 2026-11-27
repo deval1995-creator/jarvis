@@ -227,6 +227,25 @@ def create_app(
         except Exception:
             log.exception("warm-up failed; the first message will start the session instead")
 
+    async def connector_watch(every: float = 60.0) -> None:
+        """Keep Gmail, Calendar and IBKR loaded: check the live session every minute
+        and repair what dropped. The page hears about any change."""
+        last = None
+        while True:
+            await asyncio.sleep(every)
+            try:
+                check = getattr(manager.backend, "check_connectors", None)
+                if check is None or manager.status().get("busy"):
+                    continue  # the next message checks them anyway
+                status = await check()
+                if status != last:
+                    last = status
+                    await hub.broadcast({"type": "connectors", "status": status})
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("connector check failed")
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         expired = broker.expire_orphans()
@@ -234,6 +253,10 @@ def create_app(
         if expired or pruned:
             log.info("startup: expired %d stale approvals, pruned %d old audit rows", expired, pruned)
         watcher = asyncio.create_task(idle_review_loop())
+        if connectors:
+            conn_watch = asyncio.create_task(connector_watch())
+            background_tasks.add(conn_watch)
+            conn_watch.add_done_callback(background_tasks.discard)
         warmer = asyncio.create_task(warm_up())
         background_tasks.add(warmer)
         warmer.add_done_callback(background_tasks.discard)

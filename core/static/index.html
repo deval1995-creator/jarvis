@@ -657,8 +657,14 @@ function connect() {
       loadStatus();
     }
     else if (ev.type === "new_conversation") {
-      log.replaceChildren(); untrusted = false; $("chip-untrusted").hidden = true;
-      subtitle("", "New conversation, sir."); loadStatus();
+      untrusted = false; $("chip-untrusted").hidden = true;
+      if (ev.reason === "auto") {  // the Core freshened it to keep replies fast; keep the transcript
+        log.append(el("div", "note", "· fresh conversation started to keep replies fast · memories carried over"));
+        scrollLog();
+      } else {
+        log.replaceChildren(); subtitle("", "New conversation, sir.");
+      }
+      loadStatus();
     }
     else if (ev.type === "error") add("assistant", "Error: " + ev.error).classList.add("err");
   };

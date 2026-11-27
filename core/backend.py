@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
@@ -42,6 +43,9 @@ PERSONA_SOURCE = JARVIS_DIR / "jarvis_home" / "CLAUDE.md"  # edited in the repo
 # switched-off connectors) by repository root; inside the repo they would also
 # apply to dev sessions in C:\Jarvis.
 AGENT_HOME = db.default_db_path().parent / "home"
+# Sonnet 5.5: about 3-4x faster to first words than Opus 5.5 in Jarvis's tests, and
+# strong enough for tools and window design. JARVIS_MODEL overrides it.
+MODEL = os.environ.get("JARVIS_MODEL", "claude-sonnet-5-5")
 
 
 def prepare_agent_home() -> Path:
@@ -103,6 +107,7 @@ def session_options(
         allowed_tools=list(allowed_tools or []) + list(WEB_TOOLS),
         include_partial_messages=True,
         resume=resume,
+        model=MODEL,
     )
     if connectors:
         from core import connectors as conn_policy
@@ -207,6 +212,16 @@ class SDKBackend:
             client = ClaudeSDKClient(options=self._options(None))
             await client.connect()
         return client
+
+    async def context_tokens(self) -> int | None:
+        """How much the live session re-reads on every step (its context size)."""
+        if self._client is None:
+            return None
+        try:
+            return int((await self._client.get_context_usage()).get("totalTokens") or 0)
+        except Exception:
+            log.debug("context usage unavailable", exc_info=True)
+            return None
 
     async def check_connectors(self) -> dict[str, str] | None:
         """Repair any connector that dropped out of the live session (see

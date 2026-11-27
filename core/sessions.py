@@ -146,9 +146,13 @@ class SessionManager:
         else:
             yield {"type": "done", "text": reply, **self.last_turn}
 
-    async def new_conversation(self) -> str:
-        """End the current conversation and start a fresh Claude session."""
-        await self.interrupt()
+    async def new_conversation(self, interrupt: bool = True) -> str:
+        """End the current conversation and start a fresh Claude session.
+
+        interrupt=False waits for a reply in progress to finish instead of
+        cutting it off (used when the Core starts a fresh one by itself)."""
+        if interrupt:
+            await self.interrupt()
         async with self._lock:
             store.end_conversation(self.conn, self.conversation_id)
             await self.backend.close()

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import logging
 import secrets
 from contextlib import asynccontextmanager
@@ -29,6 +30,9 @@ log = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 DEFAULT_PORT = 8765
+# Past this many context tokens, the Core starts a fresh conversation (after the
+# memory review) so replies stay fast. Tool definitions alone are ~30k.
+CONTEXT_LIMIT = int(os.environ.get("JARVIS_CONTEXT_LIMIT", "60000"))
 
 
 def load_or_create_token(data_dir: Path) -> str:
@@ -88,6 +92,7 @@ def create_app(
     idle_review_seconds: float = 20 * 60,
     idle_check_seconds: float = 60,
     connectors: bool = True,
+    context_limit: int = CONTEXT_LIMIT,
 ) -> FastAPI:
     if conn is None:
         conn = db.connect()
@@ -283,6 +288,10 @@ def create_app(
         async for event in manager.process_message(text, source):
             await hub.broadcast(event)
             final = event
+        if final.get("type") == "done":
+            task = asyncio.create_task(keep_context_small())
+            background_tasks.add(task)
+            task.add_done_callback(background_tasks.discard)
         return final
 
     def page(name: str) -> str:
@@ -329,18 +338,44 @@ def create_app(
             raise HTTPException(status_code=404, detail="no such conversation")
         return conversation
 
-    @app.post("/api/conversations/new", dependencies=[Depends(require_token)])
-    async def new_conversation() -> dict:
+    async def start_new_conversation(auto: bool = False) -> str:
         ended = manager.conversation_id
-        await broker.cancel_all()
-        conversation_id = await manager.new_conversation()
-        review_in_background(ended)
+        if not auto:
+            await broker.cancel_all()
+        conversation_id = await manager.new_conversation(interrupt=not auto)
+        review_in_background(ended)  # anything worth keeping goes to memory first
         # Start the new session now so its connectors are ready for the first message.
         warmer = asyncio.create_task(warm_up())
         background_tasks.add(warmer)
         warmer.add_done_callback(background_tasks.discard)
-        await hub.broadcast({"type": "new_conversation", "conversation_id": conversation_id})
-        return {"conversation_id": conversation_id}
+        await hub.broadcast({"type": "new_conversation", "conversation_id": conversation_id,
+                             "reason": "auto" if auto else "deval"})
+        return conversation_id
+
+    rotating = False
+
+    async def keep_context_small() -> None:
+        """A long conversation makes every reply slower (each step re-reads it all).
+        Past CONTEXT_LIMIT tokens, start a fresh one once Jarvis is idle."""
+        nonlocal rotating
+        size_of = getattr(manager.backend, "context_tokens", None)
+        if rotating or size_of is None:
+            return
+        size = await size_of()
+        if not size or size < context_limit:
+            return
+        rotating = True
+        try:
+            log.info("conversation context is %d tokens; starting a fresh one", size)
+            while manager.status().get("busy"):
+                await asyncio.sleep(1)
+            await start_new_conversation(auto=True)
+        finally:
+            rotating = False
+
+    @app.post("/api/conversations/new", dependencies=[Depends(require_token)])
+    async def new_conversation() -> dict:
+        return {"conversation_id": await start_new_conversation()}
 
     # ----- memory: Deval's side (Claude can only propose) -----
 

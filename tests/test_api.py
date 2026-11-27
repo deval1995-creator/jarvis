@@ -128,3 +128,30 @@ def test_page_scripts(client):
     assert js.status_code == 200 and "jarvisVoice" in js.text and client.get("/static/orb.js").status_code == 200 and client.get("/static/nope.js").status_code == 404
     assert js.headers["content-type"].startswith("text/javascript")
     assert '<script src="/static/voice.js">' in client.get("/").text
+
+
+def test_long_conversation_is_freshened_automatically(tmp_path):
+    import time
+
+    from core import db as dbm
+    from core.api import create_app
+    from tests.fakes import FakeBackend
+
+    class BigContext(FakeBackend):
+        async def context_tokens(self):
+            return 90_000
+
+    async def no_review(*a):
+        return {"memories": [], "summary": ""}, None
+
+    conn = dbm.connect(tmp_path / "j.db")
+    app = create_app(conn=conn, backend_factory=BigContext, token="t", review_runner=no_review, context_limit=60_000)
+    with TestClient(app, base_url="http://127.0.0.1:8765") as c:
+        first = app.state.manager.conversation_id
+        assert c.post("/api/message", json={"text": "hi"}, headers={"X-Jarvis-Token": "t"}).status_code == 200
+        deadline = time.time() + 5
+        while app.state.manager.conversation_id == first and time.time() < deadline:
+            time.sleep(0.05)
+        assert app.state.manager.conversation_id != first
+        msgs = c.get(f"/api/conversations/{first}", headers={"X-Jarvis-Token": "t"}).json()["messages"]
+        assert [m["role"] for m in msgs] == ["user", "assistant"]  # the old one is kept

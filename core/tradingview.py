@@ -199,12 +199,27 @@ async def mark_zones(cfg: dict | None = None, log_cb=None) -> dict:
                 await bridge("restore", {**_where(cfg), "timeframe": before.get("timeframe")})
             except TradingViewError as e:
                 log.warning("couldn't restore the chart's timeframe: %s", e)
-    result = {"layout": data.get("layout"), "symbol": data["symbol"], "price": z["price"], "atr": z["atr"], "max_width": z["max_width"],
+    result = {"date": zmath.et_date(last_t), "last_bar_t": last_t, "layout": data.get("layout"), "symbol": data["symbol"], "price": z["price"], "atr": z["atr"], "max_width": z["max_width"],
               "sessions": z["sessions"], "resistance": z["resistance"], "support": z["support"],
               "removed_old": drawn["removed"], "drawn": drawn["drawn"], "bars": len(data["bars"]),
               "chart_left_on": before.get("timeframe"), "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
     (db.default_db_path().parent / "zones_last.json").write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
     return result
+
+
+async def read_bars(count: int = 120, cfg: dict | None = None) -> list:
+    """Bars from the zones chart (its timeframe switched to the zones timeframe and back)."""
+    cfg = {**ZONES_CONFIG, **(cfg or {})}
+    async with chart_lock():
+        await ensure_running(cfg=cfg)
+        data = await bridge("read", {**_where(cfg), "timeframe": cfg["timeframe"], "count": count})
+        try:
+            return data["bars"]
+        finally:
+            try:
+                await bridge("restore", {**_where(cfg), "timeframe": (data.get("before") or {}).get("timeframe")})
+            except TradingViewError as e:
+                log.warning("couldn't restore the chart's timeframe: %s", e)
 
 
 def last_zones() -> dict | None:

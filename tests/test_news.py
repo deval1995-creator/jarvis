@@ -85,7 +85,7 @@ def ctx_with_events(tmp_path, monkeypatch, events):
 
 def test_morning_brief_shows_and_speaks(tmp_path, monkeypatch):
     ctx, said, sent = ctx_with_events(tmp_path, monkeypatch, news.red_folder(FEED, "2026-11-25"))
-    [brief, _zones], _ = routines.make_routines(ctx)
+    brief = {r.name: r for r in routines.make_routines(ctx)[0]}["premarket_news"]
     r = asyncio.run(brief.run())
     assert "3 release(s)" in r["summary"]
     assert ctx.board.shown[0]["panels"][0]["items"][0]["when"] == "8:30 AM"
@@ -95,7 +95,7 @@ def test_morning_brief_shows_and_speaks(tmp_path, monkeypatch):
 
 def test_quiet_day_says_nothing(tmp_path, monkeypatch):
     ctx, said, sent = ctx_with_events(tmp_path, monkeypatch, [])
-    [brief, _], _ = routines.make_routines(ctx)
+    brief = {r.name: r for r in routines.make_routines(ctx)[0]}["premarket_news"]
     r = asyncio.run(brief.run())
     assert r["summary"] == "No red-folder news today." and said == [] and not ctx.board.shown
 

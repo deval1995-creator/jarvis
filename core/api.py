@@ -124,7 +124,7 @@ def create_app(
 
         browser = Browser()
         app_browser.append(browser)
-        tools_server = tools_mcp.build_tools_server(board, browser)
+        tools_server = tools_mcp.build_tools_server(board, browser, conn)
 
         # `manager` is bound below; the lambda reads it at call time.
         memory_server = build_memory_server(

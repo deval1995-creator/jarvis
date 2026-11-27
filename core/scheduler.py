@@ -70,7 +70,7 @@ class Routine:
     title: str
     at: str                                   # "09:25" ET
     run: Callable[[], Awaitable[dict]]        # returns {"summary": "...", ...}
-    days: str = "market"                      # market | weekdays | daily
+    days: str = "market"                      # market | weekdays | daily | week_end
     catch_up_minutes: int = 30
     retries: int = 2
     retry_minutes: int = 3
@@ -83,6 +83,10 @@ class Routine:
             return is_market_day(d)
         if self.days == "weekdays":
             return d.weekday() < 5
+        if self.days == "week_end":  # the week's last market day (Friday, or earlier before a holiday)
+            if not is_market_day(d):
+                return False
+            return not any(is_market_day(d + timedelta(days=k)) for k in range(1, 7 - d.weekday()))
         return True
 
     def scheduled(self, d: date) -> datetime:

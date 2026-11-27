@@ -177,6 +177,30 @@ MIGRATIONS: list[str] = [
     );
     create index routine_runs_recent on routine_runs(routine, run_date);
     """,
+    # v9: each market day's zones and, after the close, how price treated each one.
+    """
+    create table zone_days (
+        date      text primary key,   -- ET market date
+        symbol    text not null,
+        price     real not null,      -- when marked
+        atr       real not null,      -- 15-min ATR when marked
+        marked_at text not null,      -- unix seconds of the last bar used
+        zones     text not null       -- JSON: [{name, side, lo, hi, touches, keys, ...}]
+    );
+    create table zone_results (
+        date        text not null references zone_days(date) on delete cascade,
+        name        text not null,    -- R1..R4, S1..S4
+        side        text not null,
+        lo          real not null,
+        hi          real not null,
+        keys        text,             -- JSON list: PDH, PMH, round...
+        touches     integer,
+        outcome     text not null check (outcome in ('untested', 'held', 'broke', 'unclear')),
+        first_touch text,             -- ET HH:MM
+        reaction_atr real,            -- best move away from the zone after the first touch, in ATRs
+        primary key (date, name)
+    );
+    """,
 ]
 
 

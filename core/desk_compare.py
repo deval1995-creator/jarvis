@@ -13,6 +13,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+from core import zones as zmath
 from core.scheduler import ET
 
 
@@ -72,3 +73,16 @@ def streak(conn: sqlite3.Connection) -> int:
             break
         n += 1
     return n
+
+
+def save_day(conn: sqlite3.Connection, mark: dict) -> str:
+    """Record a morning's zones (from tradingview.mark_zones) for its ET date."""
+    zones = mark["resistance"] + mark["support"]
+    day = mark.get("date") or zmath.et_date(mark["last_bar_t"])
+    conn.execute(
+        "insert into zone_days (date, symbol, price, atr, marked_at, zones) values (?, ?, ?, ?, ?, ?) "
+        "on conflict(date) do update set symbol = excluded.symbol, price = excluded.price, atr = excluded.atr, "
+        "marked_at = excluded.marked_at, zones = excluded.zones",
+        (day, mark.get("symbol") or "NASDAQ:QQQ", mark["price"], mark["atr"], str(mark.get("last_bar_t")),
+         json.dumps(zones, ensure_ascii=False)))
+    return day

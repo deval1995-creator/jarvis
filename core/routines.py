@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from core import db, desk_compare, news, tradingview, zone_review
+from core import db, desk_compare, news, tradingview
 from core.scheduler import ET, Routine, is_market_day
 
 log = logging.getLogger(__name__)
@@ -92,7 +92,7 @@ def make_routines(ctx: RoutineContext) -> tuple[list[Routine], list]:
     async def premarket_zones() -> dict:
         r = await tradingview.mark_zones()
         if ctx.conn is not None:
-            zone_review.save_day(ctx.conn, r)  # graded after the close
+            desk_compare.save_day(ctx.conn, r)  # compared with the desk agent's at 09:40
         near = lambda zs: f"{zs[0]['lo']:.2f} to {zs[0]['hi']:.2f}" if zs else "none"
         nearest = lambda zs: f"{zs[0]['name']} {zs[0]['lo']:.2f}–{zs[0]['hi']:.2f}" if zs else "none"
         later = []
@@ -106,32 +106,6 @@ def make_routines(ctx: RoutineContext) -> tuple[list[Routine], list]:
                   + (" Still to come: " + "; ".join(_say_event(e) for e in later) + "." if later else ""))
         await ctx.announce("QQQ zones", text, speak=spoken)
         return {"summary": text + f" ({r['drawn']} zones on {r.get('layout') or 'the chart'})", **r}
-
-    async def zones_review() -> dict:
-        day = datetime.now(ET).date().isoformat()
-        if ctx.conn is None or ctx.conn.execute("select 1 from zone_days where date = ?", (day,)).fetchone() is None:
-            return {"summary": "No zones were recorded this morning; nothing to grade."}
-        bars = await tradingview.read_bars(count=120)
-        g = zone_review.review_day(ctx.conn, day, bars)
-        notable = [z for z in g["results"] if z["outcome"] in ("held", "broke")]
-        detail = "; ".join(f"{z['name']} {z['outcome']} at {z['first_touch']}"
-                           + (f" ({z['reaction_atr']} ATR)" if z["outcome"] == "held" else "") for z in notable)
-        text = f"{g['touched']} of {g['zones']} zones touched: {g['held']} held, {g['broke']} broke" + (f" · {detail}" if detail else "")
-        spoken = (f"Today's zones: {g['touched']} of {g['zones']} were touched; {g['held']} held and {g['broke']} broke.")
-        await ctx.announce("Zones after the close", text, speak=spoken)
-        return {"summary": text, **g}
-
-    async def zones_scorecard() -> dict:
-        sc = zone_review.scorecard(ctx.conn, days=5)
-        if not sc.get("days"):
-            return {"summary": sc["note"]}
-        if ctx.board:
-            await ctx.board.show(zone_review.scorecard_window(sc))
-        pct = lambda x: "n/a" if x is None else f"{round(x * 100)} percent"
-        text = (f"{sc['days']} days, {sc['zones']} zones: touched {pct(sc['touch_rate'])}, held {pct(sc['hold_rate'])} "
-                f"of decided ({sc['held']} held, {sc['broke']} broke)")
-        await ctx.announce("Weekly zone scorecard", text, speak=f"Your weekly zone scorecard is on screen, sir. {text}.")
-        return {"summary": text, **sc}
 
     async def desk_check() -> dict:
         day = datetime.now(ET).date().isoformat()
@@ -187,11 +161,5 @@ def make_routines(ctx: RoutineContext) -> tuple[list[Routine], list]:
                 catch_up_minutes=360, retries=0, run=desk_check,
                 description="Switch-over check: do Jarvis's zones match the Tempo desk agent's this morning? "
                             "(read-only; flags differences)"),
-        Routine(name="zones_review", title="Grade today's zones", at="16:15", days="market",
-                catch_up_minutes=240, retries=2, retry_minutes=5, run=zones_review,
-                description="After the close: did each of the morning's zones hold, break or go untested?"),
-        Routine(name="zones_scorecard", title="Weekly zone scorecard", at="16:30", days="week_end",
-                catch_up_minutes=360, retries=1, retry_minutes=10, run=zones_scorecard,
-                description="The week's zones: touch and hold rates, by rank and by what built each zone (HUD + spoken)."),
     ]
     return routines, [heads_up_watcher]

@@ -201,6 +201,10 @@ MIGRATIONS: list[str] = [
         primary key (date, name)
     );
     """,
+    # v10: zone grading removed; zone_days stays (the desk-agent comparison uses it).
+    """
+    drop table zone_results;
+    """,
 ]
 
 

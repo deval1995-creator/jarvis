@@ -27,3 +27,12 @@ def test_compare_day_reads_the_desk_file(tmp_path):
     stale = desk_file(tmp_path, "2026-11-27T15:49:53.104Z", MINE[:2], MINE[2:])
     assert dc.compare_day(conn, "2026-11-30", stale)["status"] == "no_desk"
     assert dc.compare_day(conn, "2026-12-01", f)["status"] == "no_jarvis"
+
+
+def test_morning_zones_are_recorded_for_the_comparison(tmp_path):
+    conn = db.connect(tmp_path / "j.db")
+    mark = {"date": "2026-11-30", "last_bar_t": 1796050800, "price": 645.0, "atr": 1.3, "resistance": MINE[:2], "support": MINE[2:]}
+    assert dc.save_day(conn, mark) == "2026-11-30"
+    dc.save_day(conn, mark)  # a re-run replaces the day, never duplicates it
+    assert len(json.loads(conn.execute("select zones from zone_days").fetchone()[0])) == 3
+    assert "zone_results" not in {r[0] for r in conn.execute("select name from sqlite_master")}

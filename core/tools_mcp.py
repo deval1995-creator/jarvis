@@ -17,13 +17,12 @@ import base64
 
 from core import browser as br
 from core import tradingview as tvw
-from core import zone_review
 from core import places as gplaces
 from core import tavily
 from core import weather as wx
 
 SERVER_NAME = "tools"
-TOOL_NAMES = ["weather", "search", "read_page", "places", "mark_zones", "zones_today", "zones_results", "zones_scorecard", "draw_level", "clear_my_drawings", "browser_open", "browser_read", "browser_follow",
+TOOL_NAMES = ["weather", "search", "read_page", "places", "mark_zones", "zones_today", "draw_level", "clear_my_drawings", "browser_open", "browser_read", "browser_follow",
               "browser_back", "browser_scroll", "browser_reveal", "browser_screenshot", "browser_click", "browser_type"]
 # These act on a web page; they go through an approval card (connectors.NEEDS_APPROVAL)
 # rather than being allowed outright.
@@ -161,29 +160,6 @@ def build_tools_server(board=None, browser: br.Browser | None = None, conn=None)
     async def zones_today(args):
         return _ok(tvw.last_zones() or {"note": "No zones marked yet."})
 
-    @tool("zones_results", "How the zones did on a day (default: the latest graded day): each zone held, broke, "
-          "was untested or unclear, with when it was first touched and the bounce in ATRs. Graded after each close.",
-          {"type": "object", "properties": {"date": {"type": "string", "description": "YYYY-MM-DD (ET)"}}})
-    async def zones_results(args):
-        if conn is None:
-            return _ok({"note": "No database."})
-        day = args.get("date") or (conn.execute("select max(date) from zone_results").fetchone() or [None])[0]
-        rows = [dict(r) for r in conn.execute("select * from zone_results where date = ? order by name", (day,))]
-        return _ok({"date": day, "zones": rows} if rows else {"note": "No graded day yet: zones are graded after each close."})
-
-    @tool("zones_scorecard", "Scorecard of the zones over the last N graded days: touch and hold rates, by rank "
-          "(R1/S1 vs further) and by what built the zone (prior day, premarket, swing, round number). show=true puts "
-          "it on screen as a window with charts.",
-          {"type": "object", "properties": {"days": {"type": "integer", "minimum": 1, "maximum": 250},
-                                            "show": {"type": "boolean"}}})
-    async def zones_scorecard(args):
-        if conn is None:
-            return _ok({"note": "No database."})
-        sc = zone_review.scorecard(conn, days=args.get("days") or 5)
-        if sc.get("days") and args.get("show") and board is not None:
-            await board.show(zone_review.scorecard_window(sc))
-        return _ok(sc)
-
     @tool("draw_level", "Draw a labelled horizontal line on Deval's TradingView chart (on the symbol it shows), e.g. a "
           "level Deval mentions. Labelled 'J· <price> <note>' so it's recognisably Jarvis's.",
           {"type": "object", "properties": {"price": {"type": "number"}, "note": {"type": "string"}}, "required": ["price"]})
@@ -294,5 +270,5 @@ def build_tools_server(board=None, browser: br.Browser | None = None, conn=None)
         return await _browse(browser.type(args["ref"], args["text"], bool(args.get("submit"))))
 
     return create_sdk_mcp_server(name=SERVER_NAME, version="1.0.0", tools=[
-        weather, search, read_page, places, mark_zones, zones_today, zones_results, zones_scorecard, draw_level, clear_my_drawings, browser_open, browser_read, browser_follow, browser_back,
+        weather, search, read_page, places, mark_zones, zones_today, draw_level, clear_my_drawings, browser_open, browser_read, browser_follow, browser_back,
         browser_scroll, browser_reveal, browser_screenshot, browser_click, browser_type])

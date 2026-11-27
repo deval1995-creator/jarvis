@@ -171,6 +171,7 @@
   .win .it .d { color: var(--muted); font-size: 11px; }
   .win .note { margin-top: 10px; font-size: 11px; color: var(--muted); }
   .win .pgrid { display: grid; gap: 12px; }
+  .win img.wimg { display: block; width: 100%; height: auto; border: 1px solid var(--line); }
   .win .panelw { min-width: 0; }
   .win .panelw h4 { margin: 0 0 6px; font-size: 10px; font-weight: 600; letter-spacing: .2em; color: var(--c); text-transform: uppercase; }
   .win .stats { margin-bottom: 0; }
@@ -298,7 +299,7 @@ const TOOL_LABELS = { recall: "checked memory", get_profile: "loaded your profil
                       update: "updated a memory", forget: "removed a memory", log: "added a journal entry",
                       search_threads: "searched Gmail", get_thread: "read an email", list_events: "checked the calendar",
                       search_events: "searched the calendar", get_event: "read an event",
-                      show_window: "opened a window", close_window: "closed a window", network: "mapped the memory network", weather: "checked the forecast", search: "searched the web", places: "looked up nearby places", read_page: "read a page", WebSearch: "searched the web", WebFetch: "read a page",
+                      show_window: "opened a window", close_window: "closed a window", network: "mapped the memory network", weather: "checked the forecast", search: "searched the web", places: "looked up nearby places", browser_open: "opened a web page", browser_read: "read the page", browser_follow: "followed a link", browser_back: "went back", browser_screenshot: "took a screenshot", browser_click: "clicked on the page", browser_type: "typed into the page", read_page: "read a page", WebSearch: "searched the web", WebFetch: "read a page",
                       get_account_positions: "read IBKR positions", get_account_summary: "read the IBKR account",
                       get_account_balances: "read IBKR balances", get_price_snapshot: "checked prices" };
 function toolNote(name) {
@@ -312,6 +313,7 @@ const ACTION_TITLES = {
   send_message: "Send this email?", reply: "Send this reply?", create_draft: "Save this draft in Gmail?",
   create_event: "Create this calendar event?", update_event: "Change this calendar event?",
   respond_to_event: "Answer this invitation?",
+  browser_click: "Click this on the web page?", browser_type: "Type this into the web page?",
 };
 const OUTCOMES = { approved: "approved", rejected: "rejected", expired: "expired: no answer in 10 minutes", cancelled: "cancelled" };
 const cards = new Map();
@@ -526,6 +528,10 @@ function renderPanel(pn, size) {
       list.append(row);
     }
     box.append(list);
+  } else if (pn.type === "image") {
+    const img = el("img", "wimg"); img.src = pn.image.src; img.alt = pn.image.caption || "";
+    box.append(img);
+    if (pn.image.caption) box.append(el("div", "note", pn.image.caption));
   } else if (pn.type === "text") {
     box.append(el("div", "wtext", pn.text));
   } else if (pn.type === "chart") {

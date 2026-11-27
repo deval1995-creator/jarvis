@@ -41,7 +41,8 @@ MAX_NODES, MAX_EDGES = 150, 400
 MAX_SERIES, MAX_POINTS = 8, 500
 TONES = {"up", "down", "warn", "neutral"}
 SIZES = {"small", "medium", "large", "full"}
-PANEL_TYPES = ("stats", "table", "items", "chart", "graph", "text")
+PANEL_TYPES = ("stats", "table", "items", "chart", "graph", "text", "image")
+MAX_IMAGE_CHARS = 3_000_000  # ~2 MB of base64
 CHART_KINDS = {"line", "area", "bar", "pie", "donut"}
 
 OnChange = Callable[[dict], Awaitable[None]]
@@ -204,7 +205,19 @@ def _clean_chart(chart) -> dict | None:
             "stacked": bool(chart.get("stacked"))}
 
 
-CLEANERS = {"stats": _clean_stats, "table": _clean_table, "items": _clean_items,
+def _clean_image(img) -> dict | None:
+    """Only inline images Jarvis made itself (browser screenshots): never a web
+    address, which would make Deval's browser contact that site."""
+    if not isinstance(img, dict):
+        return None
+    src = img.get("src") or ""
+    if not (isinstance(src, str) and src.startswith(("data:image/png;base64,", "data:image/jpeg;base64,"))
+            and len(src) <= MAX_IMAGE_CHARS):
+        return None
+    return {"src": src, "caption": _text(img.get("caption"), 200)}
+
+
+CLEANERS = {"image": _clean_image, "stats": _clean_stats, "table": _clean_table, "items": _clean_items,
             "chart": _clean_chart, "graph": _clean_graph}
 
 

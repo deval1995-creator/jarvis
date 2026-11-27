@@ -107,6 +107,7 @@ def create_app(
     from core.display_mcp import WindowBoard
 
     board = WindowBoard(on_change=hub.broadcast)  # windows Jarvis opens on the page
+    app_browser: list = []  # Jarvis's own web browser, closed on shutdown
 
     if backend_factory is None:
         from core import display_mcp
@@ -116,7 +117,11 @@ def create_app(
         display_server = display_mcp.build_display_server(board)
         from core import tools_mcp
 
-        tools_server = tools_mcp.build_tools_server()
+        from core.browser import Browser
+
+        browser = Browser()
+        app_browser.append(browser)
+        tools_server = tools_mcp.build_tools_server(board, browser)
 
         # `manager` is bound below; the lambda reads it at call time.
         memory_server = build_memory_server(
@@ -273,6 +278,8 @@ def create_app(
         for task in turn_tasks | background_tasks:
             task.cancel()
         await manager.close()
+        for b in app_browser:
+            await b.close()
 
     app = FastAPI(title="Jarvis Core", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])

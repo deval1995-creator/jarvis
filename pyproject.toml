@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "claude-agent-sdk>=0.2.189",
     "fastapi>=0.165.0",
+    "playwright>=1.50",
     "uvicorn[standard]>=0.54.0",
 ]
 

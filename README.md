@@ -38,6 +38,14 @@ speech counts as talking over Jarvis, default 0.2).
 Modes on the test page: **push-to-talk** (hold the button or Space; pressing while Jarvis
 speaks cuts it off) and **hands-free** (Silero VAD + Smart Turn v3 decide when you're done).
 
+## Internet tools (keys live in %LOCALAPPDATA%\Jarvis, never in the repo)
+- `search`, `read_page`: Tavily (`tavily_api_key`)
+- `places`: Google Places API (New) (`google_places_api_key`)
+- `weather`: Open-Meteo (no key)
+- `browser_*`: Playwright, Jarvis's own headless Chromium with no logins; clicks and typing
+  need an approval card. One-time setup: `uv run python -m playwright install chromium`
+- Fallback: Claude Code's WebSearch / WebFetch
+
 ## Commands
     uv run pytest                                 # tests
     uv run python scripts/sdk_smoke.py --runs 5   # SDK on your Pro plan + timings

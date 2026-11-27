@@ -108,6 +108,12 @@ def create_app(
     from core.display_mcp import WindowBoard
 
     board = WindowBoard(on_change=hub.broadcast)  # windows Jarvis opens on the page
+    from core.routines import RoutineContext
+    from core.trades import TradeWatcher
+
+    # Your broker positions, read through TradingView (never trades). Started with the Core.
+    trades = TradeWatcher(broadcast=hub.broadcast,
+                          announce=RoutineContext(board=board, broadcast=hub.broadcast, token=token, conn=conn).announce)
     app_scheduler: list = []
     backend_factory_given = backend_factory is not None
     app_browser: list = []  # Jarvis's own web browser, closed on shutdown
@@ -124,7 +130,7 @@ def create_app(
 
         browser = Browser()
         app_browser.append(browser)
-        tools_server = tools_mcp.build_tools_server(board, browser, conn)
+        tools_server = tools_mcp.build_tools_server(board, browser, conn, trades)
 
         # `manager` is bound below; the lambda reads it at call time.
         memory_server = build_memory_server(
@@ -293,6 +299,10 @@ def create_app(
         warmer = asyncio.create_task(warm_up())
         background_tasks.add(warmer)
         warmer.add_done_callback(background_tasks.discard)
+        if not backend_factory_given:  # tests: no TradingView
+            trade_task = asyncio.create_task(trades.run())
+            background_tasks.add(trade_task)
+            trade_task.add_done_callback(background_tasks.discard)
         yield
         watcher.cancel()
         for task in turn_tasks | background_tasks:
@@ -507,6 +517,10 @@ def create_app(
     @app.get("/api/audit", dependencies=[Depends(require_token)])
     async def get_audit(limit: int = 100) -> list[dict]:
         return audit.recent(conn, min(limit, 1000))
+
+    @app.get("/api/position", dependencies=[Depends(require_token)])
+    async def get_position() -> dict:
+        return trades.status()
 
     @app.get("/api/routines", dependencies=[Depends(require_token)])
     async def list_routines() -> list[dict]:

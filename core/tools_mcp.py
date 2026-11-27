@@ -22,7 +22,7 @@ from core import tavily
 from core import weather as wx
 
 SERVER_NAME = "tools"
-TOOL_NAMES = ["weather", "search", "read_page", "places", "mark_zones", "zones_today", "draw_level", "clear_my_drawings", "browser_open", "browser_read", "browser_follow",
+TOOL_NAMES = ["weather", "search", "read_page", "places", "mark_zones", "zones_today", "trade_status", "draw_level", "clear_my_drawings", "browser_open", "browser_read", "browser_follow",
               "browser_back", "browser_scroll", "browser_reveal", "browser_screenshot", "browser_click", "browser_type"]
 # These act on a web page; they go through an approval card (connectors.NEEDS_APPROVAL)
 # rather than being allowed outright.
@@ -35,7 +35,7 @@ def _ok(payload) -> dict:
     return {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]}
 
 
-def build_tools_server(board=None, browser: br.Browser | None = None, conn=None):
+def build_tools_server(board=None, browser: br.Browser | None = None, conn=None, trades=None):
     browser = browser or br.Browser()
     @tool(
         "weather",
@@ -160,6 +160,18 @@ def build_tools_server(board=None, browser: br.Browser | None = None, conn=None)
     async def zones_today(args):
         return _ok(tvw.last_zones() or {"note": "No zones marked yet."})
 
+    @tool("trade_status", "Is Deval in a trade right now? Live from his broker (Interactive Brokers) through "
+          "TradingView, updated every 2 s: open positions with entry, current price, P&L, stop and target, working "
+          "orders, today's trades and daily P&L. Instant; use it first for 'am I in a trade', 'how's my position', "
+          "'what's my P&L today'. If it can't see the account it says so: then use the IBKR tools.",
+          {"type": "object", "properties": {}})
+    async def trade_status(args):
+        from core import trades as tr
+
+        if trades is None:
+            return _ok({"status": "off", "note": "The trade watcher isn't running; use the IBKR tools."})
+        return _ok(tr.describe(trades.status()))
+
     @tool("draw_level", "Draw a labelled horizontal line on Deval's TradingView chart (on the symbol it shows), e.g. a "
           "level Deval mentions. Labelled 'J· <price> <note>' so it's recognisably Jarvis's.",
           {"type": "object", "properties": {"price": {"type": "number"}, "note": {"type": "string"}}, "required": ["price"]})
@@ -270,5 +282,5 @@ def build_tools_server(board=None, browser: br.Browser | None = None, conn=None)
         return await _browse(browser.type(args["ref"], args["text"], bool(args.get("submit"))))
 
     return create_sdk_mcp_server(name=SERVER_NAME, version="1.0.0", tools=[
-        weather, search, read_page, places, mark_zones, zones_today, draw_level, clear_my_drawings, browser_open, browser_read, browser_follow, browser_back,
+        weather, search, read_page, places, mark_zones, zones_today, trade_status, draw_level, clear_my_drawings, browser_open, browser_read, browser_follow, browser_back,
         browser_scroll, browser_reveal, browser_screenshot, browser_click, browser_type])

@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from core import db, news, tradingview, zone_review
+from core import db, desk_compare, news, tradingview, zone_review
 from core.scheduler import ET, Routine, is_market_day
 
 log = logging.getLogger(__name__)
@@ -133,6 +133,13 @@ def make_routines(ctx: RoutineContext) -> tuple[list[Routine], list]:
         await ctx.announce("Weekly zone scorecard", text, speak=f"Your weekly zone scorecard is on screen, sir. {text}.")
         return {"summary": text, **sc}
 
+    async def desk_check() -> dict:
+        day = datetime.now(ET).date().isoformat()
+        c = desk_compare.compare_day(ctx.conn, day)
+        if c["status"] == "differs":
+            await ctx.announce("Zones vs desk agent", c["summary"], level="warn", speak=False)
+        return c
+
     # ---- heads-up before each release (checked every scheduler tick) ----
     def _alerted_load(day: str) -> list[str]:
         if ctx.conn is None:
@@ -176,6 +183,10 @@ def make_routines(ctx: RoutineContext) -> tuple[list[Routine], list]:
                 catch_up_minutes=60, retries=2, retry_minutes=3, run=premarket_zones,
                 description="Fresh QQQ 15-min zones on Main's QQQ chart, then the nearest levels and the releases "
                             "still to come, spoken (09:27 ET: just after the Tempo desk's 09:25 run)."),
+        Routine(name="desk_compare", title="Zones vs desk agent", at="09:40", days="market",
+                catch_up_minutes=360, retries=0, run=desk_check,
+                description="Switch-over check: do Jarvis's zones match the Tempo desk agent's this morning? "
+                            "(read-only; flags differences)"),
         Routine(name="zones_review", title="Grade today's zones", at="16:15", days="market",
                 catch_up_minutes=240, retries=2, retry_minutes=5, run=zones_review,
                 description="After the close: did each of the morning's zones hold, break or go untested?"),

@@ -28,7 +28,7 @@ GMAIL = "claude.ai Gmail"
 CALENDAR = "claude.ai Google Calendar"
 IBKR = "claude.ai Interactive Brokers (IBKR)"
 ALLOWED_SERVERS = {GMAIL, CALENDAR, IBKR}
-OWN_SERVERS = {"memory", "display"}  # Jarvis's in-process servers: never switched off
+OWN_SERVERS = {"memory", "display", "tools"}  # Jarvis's in-process servers: never switched off
 
 
 def _prefix(server_name: str) -> str:

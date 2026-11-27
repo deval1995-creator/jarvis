@@ -114,6 +114,9 @@ def create_app(
         from core.memory_mcp import ALLOWED_TOOLS, build_memory_server
 
         display_server = display_mcp.build_display_server(board)
+        from core import tools_mcp
+
+        tools_server = tools_mcp.build_tools_server()
 
         # `manager` is bound below; the lambda reads it at call time.
         memory_server = build_memory_server(
@@ -129,8 +132,8 @@ def create_app(
         def backend_factory(resume):
             return SDKBackend(
                 resume,
-                mcp_servers={"memory": memory_server, "display": display_server},
-                allowed_tools=ALLOWED_TOOLS + display_mcp.ALLOWED_TOOLS,
+                mcp_servers={"memory": memory_server, "display": display_server, "tools": tools_server},
+                allowed_tools=ALLOWED_TOOLS + display_mcp.ALLOWED_TOOLS + tools_mcp.ALLOWED_TOOLS,
                 connectors=connectors,
                 before_tool=before_tool,
                 after_tool=after_tool,

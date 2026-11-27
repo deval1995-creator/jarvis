@@ -1,0 +1,53 @@
+"""Jarvis's own quick tools (in-process MCP server "tools").
+
+Direct data sources that answer in well under a second, instead of a web
+search: weather for now.
+
+Tool names as Claude sees them: mcp__tools__weather.
+"""
+
+from __future__ import annotations
+
+import json
+
+from claude_agent_sdk import create_sdk_mcp_server, tool
+
+from core import weather as wx
+
+SERVER_NAME = "tools"
+TOOL_NAMES = ["weather"]
+ALLOWED_TOOLS = [f"mcp__{SERVER_NAME}__{n}" for n in TOOL_NAMES]
+
+
+def _ok(payload) -> dict:
+    return {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]}
+
+
+def build_tools_server():
+    @tool(
+        "weather",
+        "Current weather and forecast with exact numbers (temperature, feels-like, rain/snow chance and "
+        "amounts, wind, sunrise/sunset) from Open-Meteo, in under a second. Always use this for weather, "
+        "never a web search. With no place it's Deval's home (Whitby, Ontario). Give a region or country "
+        "for other places with common names, e.g. place='London', region='Ontario'.",
+        {
+            "type": "object",
+            "properties": {
+                "place": {"type": "string", "description": "Town or city; omit for Deval's home"},
+                "region": {"type": "string", "description": "Province/state or country, to pick the right place"},
+                "days": {"type": "integer", "minimum": 1, "maximum": 16, "description": "Days of forecast (default 7)"},
+                "hourly_hours": {"type": "integer", "minimum": 0, "maximum": 72,
+                                 "description": "Also return hour-by-hour for this many hours (e.g. 12 for 'tonight')"},
+            },
+        },
+    )
+    async def weather(args):
+        try:
+            return _ok(await wx.get_weather(args.get("place"), args.get("region"), args.get("days") or 7,
+                                            args.get("hourly_hours") or 0))
+        except wx.WeatherError as e:
+            return {"content": [{"type": "text", "text": str(e)}], "is_error": True}
+        except Exception as e:
+            return {"content": [{"type": "text", "text": f"Weather service unavailable: {e}"}], "is_error": True}
+
+    return create_sdk_mcp_server(name=SERVER_NAME, version="1.0.0", tools=[weather])

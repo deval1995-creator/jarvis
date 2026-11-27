@@ -92,9 +92,11 @@ class Routine:
 
 class Scheduler:
     def __init__(self, conn: sqlite3.Connection, routines: list[Routine], on_event: OnEvent | None = None,
-                 now: Callable[[], datetime] | None = None, tick_seconds: float = 20.0):
+                 now: Callable[[], datetime] | None = None, tick_seconds: float = 20.0,
+                 watchers: list[Callable[[datetime], Awaitable[None]]] | None = None):
         self.conn = conn
         self.routines = {r.name: r for r in routines}
+        self.watchers = list(watchers or [])  # checked every tick (e.g. heads-ups before releases)
         self.on_event = on_event
         self._now = now or (lambda: datetime.now(ET))
         self.tick_seconds = tick_seconds
@@ -210,6 +212,11 @@ class Scheduler:
     async def tick(self) -> list[dict]:
         now = self._now()
         events = []
+        for w in self.watchers:
+            try:
+                await w(now)
+            except Exception:
+                log.exception("watcher failed")
         for r in self.routines.values():
             what = self.due(r, now)
             if what == "run":

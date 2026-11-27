@@ -107,6 +107,7 @@
   .msg.cut .body::after { content: " [interrupted]"; color: var(--muted); }
   .note { font-size: 11px; color: var(--muted); }
   .note.err, .err { color: var(--bad); }
+  .note.warnnote { color: var(--warn); }
 
   /* footer */
   footer { grid-column: 1 / -1; display: flex; gap: 10px; align-items: center; border-top: 1px solid var(--line); padding-top: 10px; }
@@ -675,6 +676,12 @@ function connect() {
     }
     else if (ev.type === "approval_decided") settleCard(ev.approval);
     else if (ev.type === "connectors") loadStatus();
+    else if (ev.type === "announce") {
+      log.append(el("div", "note" + (ev.level === "warn" ? " warnnote" : ""), `${ev.spoken ? "🔊" : "·"} ${ev.title}: ${ev.text}`));
+      scrollLog();
+      subtitle(ev.title, ev.text);
+      host.notify(ev.title, ev.text);
+    }
     else if (ev.type === "routine") {
       loadRoutines();
       if (ev.status === "failed" || ev.status === "missed") {
@@ -682,8 +689,6 @@ function connect() {
           : `${ev.title} failed: ${ev.error}` + (ev.retry_in_minutes ? ` · retrying in ${ev.retry_in_minutes} min` : "");
         log.append(el("div", "note err", "· " + msg)); scrollLog();
         host.notify("Jarvis routine", msg);
-      } else if (ev.status === "done") {
-        log.append(el("div", "note", `· ${ev.title}: ${ev.summary}`)); scrollLog();
       }
     }
     else if (ev.type === "window") renderWindow(ev.window);

@@ -265,14 +265,15 @@ def create_app(
     # ----- routines (scheduled jobs) -----
     from core.scheduler import Scheduler
 
+    watchers: list = []
     if routines is None:
         if backend_factory_given:
             routines = []  # tests: no real jobs
         else:
-            from core.routines import default_routines
+            from core.routines import RoutineContext, make_routines
 
-            routines = default_routines()
-    scheduler = Scheduler(conn, routines, on_event=hub.broadcast)
+            routines, watchers = make_routines(RoutineContext(board=board, broadcast=hub.broadcast, token=token, conn=conn))
+    scheduler = Scheduler(conn, routines, on_event=hub.broadcast, watchers=watchers)
     app_scheduler.append(scheduler)
 
     @asynccontextmanager

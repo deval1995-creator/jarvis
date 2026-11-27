@@ -270,3 +270,14 @@ def test_other_sites_may_not():
         assert r.status_code == 403
         r = c.options("/api/offer", headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"})
         assert "access-control-allow-origin" not in r.headers
+
+
+def test_say_needs_jarvis_token(tmp_path, monkeypatch):
+    import voice.server as vs
+
+    monkeypatch.setattr(vs, "read_token", lambda d: "secret-token")
+    with voice_client() as c:
+        assert c.post("/api/say", json={"text": "hi"}).status_code == 401
+        assert c.post("/api/say", json={"text": "hi"}, headers={"X-Jarvis-Token": "wrong"}).status_code == 401
+        r = c.post("/api/say", json={"text": "hi"}, headers={"X-Jarvis-Token": "secret-token"})
+        assert r.status_code == 200 and r.json() == {"spoken": False, "listeners": 0}  # nobody connected

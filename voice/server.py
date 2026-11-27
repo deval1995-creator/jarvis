@@ -46,6 +46,7 @@ def create_app(port: int = 8766, core_url: str = CORE_URL, preload: bool = True)
     from voice.bot import build_task
 
     handler = SmallWebRTCRequestHandler()
+    live_tasks: set = set()  # pipelines of connected clients, for announcements
     # Its own test page, and the Core's chat page (which the desktop app shows).
     allowed_origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}", *CORE_PAGE_ORIGINS}
 
@@ -80,12 +81,31 @@ def create_app(port: int = 8766, core_url: str = CORE_URL, preload: bool = True)
             await connection.disconnect()
             return
         task = build_task(connection, core, mode)
+        live_tasks.add(task)
         try:
             runner = WorkerRunner(handle_sigint=False)
             await runner.add_workers(task)
             await runner.run()
         finally:
+            live_tasks.discard(task)
             await core.close()
+
+    @app.post("/api/say")
+    async def say(request: Request) -> dict:
+        """The Core announces something (routines: news brief, heads-ups). Needs Jarvis's token,
+        so no other program or web page can make Jarvis talk."""
+        import secrets as _secrets
+
+        from pipecat.frames.frames import TTSSpeakFrame
+
+        if not _secrets.compare_digest(request.headers.get("x-jarvis-token", ""), read_token(db.default_db_path().parent)):
+            raise HTTPException(status_code=401, detail="bad token")
+        text = str((await request.json()).get("text", "")).strip()[:1500]
+        if not text:
+            raise HTTPException(status_code=422, detail="nothing to say")
+        for task in list(live_tasks):
+            await task.queue_frame(TTSSpeakFrame(text))
+        return {"spoken": bool(live_tasks), "listeners": len(live_tasks)}
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:

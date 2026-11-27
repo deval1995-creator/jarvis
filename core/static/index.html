@@ -122,6 +122,9 @@
   button:disabled { opacity: .35; cursor: default; }
   button.primary { background: rgba(92, 200, 255, .18); color: var(--c-hi); }
   .item button { padding: 3px 8px; font-size: 10px; }
+  .dev { display: block; margin-bottom: 8px; }
+  .dev span { display: block; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim, #7fa3b8); margin-bottom: 3px; }
+  .dev select { width: 100%; }
   #talk { user-select: none; touch-action: none; min-width: 130px; }
   #talk.held { background: var(--c); color: var(--bg); box-shadow: 0 0 18px var(--c); }
 
@@ -215,6 +218,12 @@
   <div class="panel">
     <h2>Systems</h2>
     <div class="sys" id="systems"></div>
+  </div>
+  <div class="panel" id="audiopanel">
+    <h2>Audio</h2>
+    <label class="dev"><span>Microphone</span><select id="micdev"></select></label>
+    <label class="dev"><span>Speaker</span><select id="spkdev"></select></label>
+    <button id="spktest" type="button">Test speaker</button>
   </div>
   <div class="panel" id="routinepanel">
     <h2>Routines</h2>
@@ -793,6 +802,27 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("keyup", (e) => { if (e.code === "Space" && !typing(e)) release(); });
 window.addEventListener("blur", release);
 if (voice.wantsOn && localStorage.getItem("voiceMode")) voice.connect();
+
+// ---- microphone and speaker selection ----
+async function loadDevices() {
+  let d;
+  try { d = await voice.devices(); } catch { return; }
+  const fill = (sel, list, chosen, what) => {
+    sel.replaceChildren(new Option(`System default ${what}`, ""), ...list.map((x) => new Option(x.label, x.id)));
+    sel.value = list.some((x) => x.id === chosen) ? chosen : "";
+  };
+  fill($("micdev"), d.mics, d.mic, "microphone");
+  fill($("spkdev"), d.speakers, d.speaker, "speaker");
+  $("spkdev").disabled = !d.canPickSpeaker;
+  if (!d.canPickSpeaker) $("spkdev").title = "This browser can't choose a speaker";
+  if (d.mics.length && !d.mics[0].label.trim()) $("micdev").title = "Turn the mic on once to see device names";
+}
+$("micdev").onchange = (e) => voice.setMic(e.target.value);
+$("spkdev").onchange = (e) => voice.setSpeaker(e.target.value);
+$("spktest").onclick = () => voice.testSpeaker();
+voice.onDevicesChanged(loadDevices);
+voice.on("state", (s) => { if (s === "idle") loadDevices(); });  // names appear once the mic is allowed
+loadDevices();
 
 setInterval(loadStatus, 30000);
 renderSystems(); renderNumbers();

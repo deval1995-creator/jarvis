@@ -9,6 +9,9 @@
   let audioCtx = null, analyser = null, micAnalyser = null, tickTimer = null;
   const audioEl = new Audio();
   audioEl.autoplay = true;
+  // Chosen devices ("" = the system default), remembered in this browser.
+  let micId = localStorage.getItem("micDevice") || "";
+  let speakerId = localStorage.getItem("speakerDevice") || "";
 
   const emit = (kind, value) => listeners[kind].forEach((f) => f(value));
   const log = (text) => emit("log", text);
@@ -29,7 +32,7 @@
   function thinking(on) {
     clearInterval(tickTimer); tickTimer = null;
     if (!on || localStorage.getItem("voiceTick") === "off") return;
-    audioCtx = audioCtx || new AudioContext();
+    audioCtx = audioCtx || newAudioContext();
     const tick = () => {
       const o = audioCtx.createOscillator(), g = audioCtx.createGain(), t = audioCtx.currentTime;
       o.frequency.value = 880; g.gain.setValueAtTime(0.0001, t);
@@ -82,10 +85,8 @@
     clearTimeout(retry);
     setState("connecting");
     try {
-      mic = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-      audioCtx = audioCtx || new AudioContext();
+      mic = await openMic();
+      audioCtx = audioCtx || newAudioContext();
       micAnalyser = audioCtx.createAnalyser(); micAnalyser.fftSize = 512;
       audioCtx.createMediaStreamSource(mic).connect(micAnalyser);
       pc = new RTCPeerConnection();
@@ -96,7 +97,8 @@
         if (e.track.kind !== "audio") return;
         const stream = new MediaStream([e.track]);
         audioEl.srcObject = stream;
-        audioCtx = audioCtx || new AudioContext();
+        applySpeaker();
+        audioCtx = audioCtx || newAudioContext();
         analyser = audioCtx.createAnalyser(); analyser.fftSize = 512;
         audioCtx.createMediaStreamSource(stream).connect(analyser);
       };
@@ -133,6 +135,60 @@
       lastError = msg;
       disconnect();
     }
+  }
+
+  // ---- device selection ----
+  const MIC_OPTS = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+  async function openMic() {
+    if (micId) {
+      try {
+        return await navigator.mediaDevices.getUserMedia({ audio: { ...MIC_OPTS, deviceId: { exact: micId } } });
+      } catch (e) {
+        if (e.name !== "OverconstrainedError" && e.name !== "NotFoundError") throw e;
+        log("voice: the chosen microphone isn't connected; using the default one");
+      }
+    }
+    return navigator.mediaDevices.getUserMedia({ audio: MIC_OPTS });
+  }
+  function newAudioContext() {
+    const ctx = new AudioContext();
+    if (speakerId && ctx.setSinkId) ctx.setSinkId(speakerId).catch(() => {});
+    return ctx;
+  }
+  async function applySpeaker() {
+    try {
+      if (audioEl.setSinkId) await audioEl.setSinkId(speakerId);
+      if (audioCtx?.setSinkId) await audioCtx.setSinkId(speakerId);
+    } catch (e) {
+      log("voice: the chosen speaker isn't available; using the default one");
+      try { await audioEl.setSinkId(""); if (audioCtx?.setSinkId) await audioCtx.setSinkId(""); } catch {}
+    }
+  }
+  async function devices() {
+    const all = await navigator.mediaDevices.enumerateDevices();
+    const pick = (kind) => all.filter((d) => d.kind === kind && d.deviceId !== "default" && d.deviceId !== "communications")
+      .map((d, i) => ({ id: d.deviceId, label: d.label || `${kind === "audioinput" ? "Microphone" : "Speaker"} ${i + 1}` }));
+    return { mics: pick("audioinput"), speakers: pick("audiooutput"), mic: micId, speaker: speakerId,
+             canPickSpeaker: !!audioEl.setSinkId };
+  }
+  async function setMic(id) {
+    micId = id || ""; localStorage.setItem("micDevice", micId);
+    if (pc) connect();  // reconnect with the new mic (same mode)
+  }
+  async function setSpeaker(id) {
+    speakerId = id || ""; localStorage.setItem("speakerDevice", speakerId);
+    await applySpeaker();
+  }
+  function testSpeaker() {
+    audioCtx = audioCtx || newAudioContext();
+    audioCtx.resume();
+    const t = audioCtx.currentTime;
+    [660, 880].forEach((f, i) => {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain(), s = t + i * 0.18;
+      o.frequency.value = f; g.gain.setValueAtTime(0.0001, s);
+      g.gain.exponentialRampToValueAtTime(0.15, s + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, s + 0.16);
+      o.connect(g).connect(audioCtx.destination); o.start(s); o.stop(s + 0.17);
+    });
   }
 
   // If the link drops while voice is meant to be on (the voice service restarted,
@@ -182,6 +238,8 @@
     spectrum,
     levels: () => ({ mic: held || mode === "hands-free" ? level(micAnalyser) : 0, out: level(analyser) }),
     connect, disconnect, ptt, setMuted,
+    devices, setMic, setSpeaker, testSpeaker,
+    onDevicesChanged: (f) => navigator.mediaDevices.addEventListener("devicechange", f),
     toggleMute: () => setMuted(micState() !== "off"),
     get mode() { return mode; },
     get state() { return state; },

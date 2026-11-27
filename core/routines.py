@@ -148,6 +148,6 @@ def make_routines(ctx: RoutineContext) -> tuple[list[Routine], list]:
         Routine(name="premarket_zones", title="QQQ zones in TradingView", at="09:27", days="market",
                 catch_up_minutes=60, retries=2, retry_minutes=3, run=premarket_zones,
                 description="Fresh QQQ 15-min zones on Main's QQQ chart, then the nearest levels and the releases "
-                            "still to come, spoken (09:27 ET: just after the Tempo desk's 09:25 run)."),
+                            "still to come, spoken."),
     ]
     return routines, [heads_up_watcher]

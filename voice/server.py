@@ -20,7 +20,7 @@ cuda.add_dll_directories()  # before faster-whisper / ctranslate2 load
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from fastapi.responses import HTMLResponse  # noqa: E402
+from fastapi.responses import HTMLResponse, Response  # noqa: E402
 from starlette.middleware.trustedhost import TrustedHostMiddleware  # noqa: E402
 
 from core import db  # noqa: E402
@@ -106,6 +106,22 @@ def create_app(port: int = 8766, core_url: str = CORE_URL, preload: bool = True)
         for task in list(live_tasks):
             await task.queue_frame(TTSSpeakFrame(text))
         return {"spoken": bool(live_tasks), "listeners": len(live_tasks)}
+
+    tts_lock = asyncio.Lock()
+
+    @app.post("/api/tts")
+    async def tts(request: Request) -> Response:
+        """Speech for a sentence of a typed reply; the page plays it on the chosen speaker.
+        Only Jarvis's own page may call it (origin check + CORS)."""
+        check_origin(request)
+        text = str((await request.json()).get("text", "")).strip()[:600]
+        if not text:
+            raise HTTPException(status_code=422, detail="nothing to say")
+        from voice.models import synthesize_wav
+
+        async with tts_lock:  # one at a time on the GPU
+            wav = await asyncio.to_thread(synthesize_wav, text)
+        return Response(content=wav, media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:

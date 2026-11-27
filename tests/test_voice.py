@@ -281,3 +281,14 @@ def test_say_needs_jarvis_token(tmp_path, monkeypatch):
         assert c.post("/api/say", json={"text": "hi"}, headers={"X-Jarvis-Token": "wrong"}).status_code == 401
         r = c.post("/api/say", json={"text": "hi"}, headers={"X-Jarvis-Token": "secret-token"})
         assert r.status_code == 200 and r.json() == {"spoken": False, "listeners": 0}  # nobody connected
+
+
+def test_tts_returns_audio_for_jarvis_page_only(monkeypatch):
+    import voice.models as vm
+
+    monkeypatch.setattr(vm, "synthesize_wav", lambda text: b"RIFF....WAVE" + text.encode())
+    with voice_client() as c:
+        assert c.post("/api/tts", json={"text": "hi"}, headers={"Origin": "https://evil.example"}).status_code == 403
+        assert c.post("/api/tts", json={"text": "  "}).status_code == 422
+        r = c.post("/api/tts", json={"text": "Good evening, sir."}, headers={"Origin": "http://127.0.0.1:8765"})
+        assert r.status_code == 200 and r.headers["content-type"] == "audio/wav" and r.content.endswith(b"sir.")

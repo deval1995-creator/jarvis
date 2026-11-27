@@ -690,6 +690,7 @@ function connect() {
       scrollLog();
       subtitle(ev.title, ev.text);
       host.notify(ev.title, ev.text);
+      if (!ev.spoken && ev.say) voice.speak(ev.say, true);  // mic off: say it on the speaker
     }
     else if (ev.type === "routine") {
       loadRoutines();
@@ -704,10 +705,13 @@ function connect() {
     else if (ev.type === "window_closed") dropWindow(ev.id);
     else if (ev.type === "start") {
       add("user", ev.text, ev.source); current = add("assistant", "");
+      voice.stopSpeaking();
+      speakingTurn = ev.source !== "voice";  // voice turns are already spoken by the voice link
       subtitle(ev.text, "…"); if (status) status.busy = true; renderSystems();
     }
     else if (ev.type === "delta" && current) {
       current.body.textContent += ev.text; subtitle(undefined, current.body.textContent); scrollLog();
+      if (speakingTurn) voice.speak(ev.text);
     }
     else if (ev.type === "tool" && current) toolNote(ev.name);
     else if (ev.type === "untrusted") { untrusted = true; $("chip-untrusted").hidden = false; renderSystems(); }
@@ -728,6 +732,8 @@ function connect() {
         if (ev.type === "error") { current.classList.add("err"); current.body.textContent += (current.body.textContent ? "\n" : "") + "Error: " + ev.error; }
         subtitle(undefined, current.body.textContent || (ev.type === "interrupted" ? "Stopped." : ""));
       }
+      if (speakingTurn && ev.type === "done") voice.speak("", true);
+      speakingTurn = false;
       current = null;
       Object.assign(lastCore, { first_token_ms: ev.first_token_ms, total_ms: ev.total_ms });
       loadStatus();
@@ -754,7 +760,7 @@ $("chat").onsubmit = (e) => {
   input.value = "";
 };
 input.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("chat").requestSubmit(); } };
-const stop = () => ws.send(JSON.stringify({ type: "interrupt" }));
+const stop = () => { voice.stopSpeaking(); ws.send(JSON.stringify({ type: "interrupt" })); };
 $("stop").onclick = stop;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") stop(); });
 $("newchat").onclick = () => api("/api/conversations/new", { method: "POST" });
@@ -817,6 +823,7 @@ async function loadDevices() {
   if (!d.canPickSpeaker) $("spkdev").title = "This browser can't choose a speaker";
   if (d.mics.length && !d.mics[0].label.trim()) $("micdev").title = "Turn the mic on once to see device names";
 }
+let speakingTurn = false;
 $("micdev").onchange = (e) => voice.setMic(e.target.value);
 $("spkdev").onchange = (e) => voice.setSpeaker(e.target.value);
 $("spktest").onclick = () => voice.testSpeaker();

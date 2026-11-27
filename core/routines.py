@@ -52,7 +52,8 @@ class RoutineContext:
     async def announce(self, title: str, text: str, level: str = "info", speak: str | None = None) -> None:
         spoken = await self.say(speak or text) if speak is not False else False
         if self.broadcast:
-            await self.broadcast({"type": "announce", "title": title, "text": text, "level": level, "spoken": spoken})
+            await self.broadcast({"type": "announce", "title": title, "text": text, "level": level, "spoken": spoken,
+                                  "say": None if speak is False else (speak or text)})
 
 
 def _fmt_event(e: dict) -> str:

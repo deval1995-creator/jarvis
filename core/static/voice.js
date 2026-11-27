@@ -72,6 +72,7 @@
   function send(obj) { if (dc && dc.readyState === "open") dc.send(JSON.stringify(obj)); }
 
   function ptt(down) {
+    if (down) stopSpeaking();  // talking cuts a typed reply short
     if (!pc || mode !== "ptt" || down === held) return;
     held = down;
     if (down && state === "speaking") measureStop();
@@ -191,6 +192,68 @@
     });
   }
 
+  // ---- typed replies spoken on the speaker (no mic needed) ----
+  // Text arrives in pieces; whole sentences are sent to the voice service as they
+  // complete, fetched ahead and played in order through the chosen speaker.
+  let ttsAnalyser = null, sayBuf = "", inCode = false, queue = [], playing = null, sayGen = 0;
+  const speakable = (line) => {
+    if (/^\s*```/.test(line)) { inCode = !inCode; return ""; }
+    if (inCode || /^\s*\|/.test(line)) return "";  // code and tables stay on screen
+    return line.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/https?:\/\/\S+/g, "the link")
+      .replace(/^\s*(#{1,6}\s+|[-*•]\s+|\d+[.)]\s+|>\s*)/, "").replace(/[*_`~]+/g, "").replace(/\s+/g, " ").trim();
+  };
+  function enqueue(text) {
+    text = text.trim();
+    if (!/[\p{L}\p{N}]/u.test(text)) return;
+    const gen = sayGen;
+    const audio = fetch(VOICE_URL + "/api/tts", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                   body: JSON.stringify({ text }) })
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error("tts " + r.status))))
+      .then((b) => audioCtx.decodeAudioData(b));
+    audio.catch(() => {});
+    queue.push({ audio, gen });
+    if (!playing) playNext();
+  }
+  async function playNext() {
+    const item = queue.shift();
+    if (!item) { playing = null; return; }
+    playing = item;
+    let buffer;
+    try { buffer = await item.audio; } catch (e) {
+      if (item.gen === sayGen) log("voice: couldn't speak the reply (is the voice service running?)");
+      return playNext();
+    }
+    if (item.gen !== sayGen) return playNext();
+    const src = audioCtx.createBufferSource();
+    src.buffer = buffer;
+    if (!ttsAnalyser) { ttsAnalyser = audioCtx.createAnalyser(); ttsAnalyser.fftSize = 512; }
+    src.connect(ttsAnalyser).connect(audioCtx.destination);
+    item.src = src;
+    src.onended = () => playNext();
+    src.start();
+  }
+  function speak(piece, final = false) {
+    audioCtx = audioCtx || newAudioContext();
+    audioCtx.resume();
+    sayBuf += piece;
+    // whole lines first (markdown is line-based), then whole sentences
+    let nl;
+    while ((nl = sayBuf.indexOf("\n")) >= 0) {
+      const line = speakable(sayBuf.slice(0, nl)); sayBuf = sayBuf.slice(nl + 1);
+      if (line) enqueue(line);
+    }
+    if (!inCode) {
+      const m = sayBuf.match(/^(.*?[.!?])\s+(?=\S)/s);
+      if (m && m[1].length > 25) { enqueue(speakable(m[1])); sayBuf = sayBuf.slice(m[0].length); }
+    }
+    if (final) { const rest = speakable(sayBuf); sayBuf = ""; inCode = false; if (rest) enqueue(rest); }
+  }
+  function stopSpeaking() {
+    sayGen++; sayBuf = ""; inCode = false; queue = [];
+    try { playing?.src?.stop(); } catch {}
+    playing = null;
+  }
+
   // If the link drops while voice is meant to be on (the voice service restarted,
   // or wasn't up yet), try again every few seconds.
   let retry = null, lastError = null;
@@ -230,15 +293,18 @@
   const micBins = new Uint8Array(256), outBins = new Uint8Array(256);
   function spectrum() {
     if (micAnalyser && (held || mode === "hands-free")) micAnalyser.getByteFrequencyData(micBins); else micBins.fill(0);
-    if (analyser) analyser.getByteFrequencyData(outBins); else outBins.fill(0);
+    const out = playing && ttsAnalyser ? ttsAnalyser : analyser;
+    if (out) out.getByteFrequencyData(outBins); else outBins.fill(0);
     return { mic: micBins, out: outBins };
   }
 
   window.jarvisVoice = {
     spectrum,
-    levels: () => ({ mic: held || mode === "hands-free" ? level(micAnalyser) : 0, out: level(analyser) }),
+    levels: () => ({ mic: held || mode === "hands-free" ? level(micAnalyser) : 0,
+                     out: Math.max(level(analyser), playing ? level(ttsAnalyser) : 0) }),
     connect, disconnect, ptt, setMuted,
-    devices, setMic, setSpeaker, testSpeaker,
+    devices, setMic, setSpeaker, testSpeaker, speak, stopSpeaking,
+    get speaking() { return !!playing; },
     onDevicesChanged: (f) => navigator.mediaDevices.addEventListener("devicechange", f),
     toggleMute: () => setMuted(micState() !== "off"),
     get mode() { return mode; },

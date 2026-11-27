@@ -129,6 +129,24 @@ def make_tts(**kwargs) -> kokoro_tts.KokoroTTSService:
     )
 
 
+def synthesize_wav(text: str) -> bytes:
+    """Jarvis's voice for a piece of text, as a 16-bit mono WAV (for typed replies on the speaker)."""
+    import io
+    import wave
+
+    import numpy as np
+
+    if not _kokoro:
+        make_tts()
+    kokoro = next(iter(_kokoro.values()))
+    samples, rate = kokoro.create(text, voice=VOICE, lang=VOICE_LANG, speed=VOICE_SPEED)
+    pcm = (np.clip(samples, -1, 1) * 32767).astype("<i2").tobytes()
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(pcm)
+    return buf.getvalue()
+
+
 def preload() -> None:
     """Load (and download, the first time) both models before anyone talks."""
     log.info("loading Whisper %s on %s and Kokoro voice %s", WHISPER_MODEL, WHISPER_DEVICE, VOICE)

@@ -48,11 +48,32 @@ AGENT_HOME = db.default_db_path().parent / "home"
 MODEL = os.environ.get("JARVIS_MODEL", "claude-sonnet-5-5")
 
 
+def known_facts() -> str:
+    """Deval's key memories (pinned and important, local-only left out), so a
+    fresh session knows the basics without a recall step."""
+    try:
+        from core import memory
+
+        conn = db.connect()
+        try:
+            facts = [m["text"] for m in memory.get_profile(conn, limit=25)["memories"]]
+        finally:
+            conn.close()
+    except Exception:
+        log.debug("could not read memories for the persona", exc_info=True)
+        return ""
+    if not facts:
+        return ""
+    lines = "\n".join(f"- {f}" for f in facts)
+    return ("\n\n## What you already know about Deval (from memory, as this conversation began)\n"
+            "Use these directly; call `recall` for anything else or more detail.\n" + lines + "\n")
+
+
 def prepare_agent_home() -> Path:
-    """Create Jarvis's home and copy the current persona into it."""
+    """Create Jarvis's home and copy the current persona (plus key memories) into it."""
     AGENT_HOME.mkdir(parents=True, exist_ok=True)
     target = AGENT_HOME / "CLAUDE.md"
-    persona = PERSONA_SOURCE.read_text(encoding="utf-8")
+    persona = PERSONA_SOURCE.read_text(encoding="utf-8") + known_facts()
     if not target.exists() or target.read_text(encoding="utf-8") != persona:
         target.write_text(persona, encoding="utf-8")
     return AGENT_HOME

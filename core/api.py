@@ -93,6 +93,7 @@ def create_app(
     idle_check_seconds: float = 60,
     connectors: bool = True,
     context_limit: int = CONTEXT_LIMIT,
+    routines: list | None = None,
 ) -> FastAPI:
     if conn is None:
         conn = db.connect()
@@ -107,6 +108,8 @@ def create_app(
     from core.display_mcp import WindowBoard
 
     board = WindowBoard(on_change=hub.broadcast)  # windows Jarvis opens on the page
+    app_scheduler: list = []
+    backend_factory_given = backend_factory is not None
     app_browser: list = []  # Jarvis's own web browser, closed on shutdown
 
     if backend_factory is None:
@@ -259,6 +262,19 @@ def create_app(
             except Exception:
                 log.exception("connector check failed")
 
+    # ----- routines (scheduled jobs) -----
+    from core.scheduler import Scheduler
+
+    if routines is None:
+        if backend_factory_given:
+            routines = []  # tests: no real jobs
+        else:
+            from core.routines import default_routines
+
+            routines = default_routines()
+    scheduler = Scheduler(conn, routines, on_event=hub.broadcast)
+    app_scheduler.append(scheduler)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         expired = broker.expire_orphans()
@@ -266,6 +282,9 @@ def create_app(
         if expired or pruned:
             log.info("startup: expired %d stale approvals, pruned %d old audit rows", expired, pruned)
         watcher = asyncio.create_task(idle_review_loop())
+        sched_task = asyncio.create_task(scheduler.loop())
+        background_tasks.add(sched_task)
+        sched_task.add_done_callback(background_tasks.discard)
         if connectors:
             conn_watch = asyncio.create_task(connector_watch())
             background_tasks.add(conn_watch)
@@ -286,6 +305,7 @@ def create_app(
     app.state.manager = manager
     app.state.broker = broker
     app.state.board = board
+    app.state.scheduler = scheduler
     app.state.tool_hooks = {"before": before_tool, "after": after_tool, "gate": permission_gate}
 
     def require_token(x_jarvis_token: str = Header(default="")) -> None:
@@ -486,6 +506,19 @@ def create_app(
     @app.get("/api/audit", dependencies=[Depends(require_token)])
     async def get_audit(limit: int = 100) -> list[dict]:
         return audit.recent(conn, min(limit, 1000))
+
+    @app.get("/api/routines", dependencies=[Depends(require_token)])
+    async def list_routines() -> list[dict]:
+        return scheduler.status()
+
+    @app.post("/api/routines/{name}/run", dependencies=[Depends(require_token)])
+    async def run_routine(name: str) -> dict:
+        if name not in scheduler.routines:
+            raise HTTPException(status_code=404, detail=f"no routine {name}")
+        task = asyncio.create_task(scheduler.run_now(name))
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+        return {"started": name}
 
     @app.get("/api/windows", dependencies=[Depends(require_token)])
     async def list_windows() -> list[dict]:

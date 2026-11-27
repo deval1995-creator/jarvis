@@ -159,6 +159,24 @@ MIGRATIONS: list[str] = [
     create index tool_audit_use on tool_audit(tool_use_id);
     create index tool_audit_created on tool_audit(created_at);
     """,
+    # v8: routines (scheduled jobs). One row per routine per day: a restart or a
+    # catch-up never runs a routine twice on the same day.
+    """
+    create table routine_runs (
+        id          integer primary key,
+        routine     text not null,
+        run_date    text not null,          -- the ET date it belongs to (YYYY-MM-DD)
+        status      text not null check (status in ('running', 'done', 'failed', 'missed', 'skipped')),
+        attempts    integer not null default 0,
+        started_at  text,
+        finished_at text,
+        summary     text,                   -- one line for the HUD
+        result      text,                   -- JSON details
+        error       text,
+        unique (routine, run_date)
+    );
+    create index routine_runs_recent on routine_runs(routine, run_date);
+    """,
 ]
 
 

@@ -64,6 +64,14 @@
   .item .actions { display: flex; gap: 6px; margin-top: 4px; }
   .item input[type=text] { width: 100%; margin-top: 4px; }
   .empty { color: var(--muted); font-size: 12px; }
+  .rt { border-left: 2px solid var(--line); padding: 4px 8px; margin-bottom: 8px; font-size: 12px; }
+  .rt.done { border-left-color: var(--good); } .rt.failed, .rt.missed { border-left-color: var(--bad); }
+  .rt.running { border-left-color: var(--warn); }
+  .rt .top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .rt .nm { color: var(--c-hi); } .rt .when { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .rt .last { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .rt .last.bad { color: var(--bad); }
+  .rt button { padding: 2px 8px; font-size: 10px; margin-top: 4px; }
 
   /* centre */
   #centre { grid-column: 2; grid-row: 2; position: relative; display: flex; flex-direction: column; align-items: center;
@@ -206,6 +214,10 @@
   <div class="panel">
     <h2>Systems</h2>
     <div class="sys" id="systems"></div>
+  </div>
+  <div class="panel" id="routinepanel">
+    <h2>Routines</h2>
+    <div id="routines"><div class="empty">Loading…</div></div>
   </div>
   <div class="panel" id="mempanel" hidden>
     <h2>Needs your approval <span class="count" id="inboxCount"></span></h2>
@@ -400,6 +412,39 @@ async function loadMemories() {
   memCount = (await api("/api/memory")).length;
   renderSystems();
 }
+
+// ---------- routines ----------
+const fmtET = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(iso), now = new Date();
+  const day = d.toDateString() === now.toDateString() ? "today"
+    : d.toDateString() === new Date(now.getTime() + 864e5).toDateString() ? "tomorrow"
+    : d.toLocaleDateString([], { weekday: "short" });
+  return `${day} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}`;
+};
+async function loadRoutines() {
+  let list = [];
+  try { list = await api("/api/routines"); } catch { return; }
+  const box = $("routines");
+  box.replaceChildren(...(list.length ? list.map((r) => {
+    const st = r.running ? "running" : r.last?.status || "";
+    const c = el("div", "rt " + st), top = el("div", "top");
+    top.append(el("span", "nm", r.title), el("span", "when", r.running ? "running…" : "next " + fmtET(r.next_run)));
+    c.append(top);
+    if (r.last) {
+      const ok = r.last.status === "done";
+      const text = ok ? `✓ ${r.last.run_date.slice(0, 10)}: ${r.last.summary || "done"}`
+        : r.last.status === "failed" ? `✗ ${r.last.error || "failed"}` : r.last.status === "missed" ? "✗ missed (Jarvis was off)" : r.last.status;
+      c.append(el("div", "last" + (ok ? "" : " bad"), text));
+    }
+    const run = el("button", "", "Run now");
+    run.disabled = r.running;
+    run.onclick = () => api(`/api/routines/${r.name}/run`, { method: "POST" }).then(loadRoutines);
+    c.append(run);
+    return c;
+  }) : [el("div", "empty", "No routines.")]));
+}
+setInterval(loadRoutines, 60000);
 
 // ---------- status panels ----------
 let status = null;
@@ -622,7 +667,7 @@ function connect() {
     const ev = JSON.parse(e.data);
     if (ev.type === "ready") {
       coreUp = true; $("chip-core").className = "chip on"; $("chip-core").textContent = "CORE ONLINE";
-      loadHistory().then(loadApprovals); loadInbox(); loadMemories(); loadStatus(); loadWindows();
+      loadHistory().then(loadApprovals); loadInbox(); loadMemories(); loadStatus(); loadWindows(); loadRoutines();
     }
     else if (ev.type === "approval_request") {
       host.notify("Jarvis needs your approval", actionTitle(ev.approval.tool) + " Open Jarvis to approve or reject.");
@@ -630,6 +675,17 @@ function connect() {
     }
     else if (ev.type === "approval_decided") settleCard(ev.approval);
     else if (ev.type === "connectors") loadStatus();
+    else if (ev.type === "routine") {
+      loadRoutines();
+      if (ev.status === "failed" || ev.status === "missed") {
+        const msg = ev.status === "missed" ? `${ev.title}: missed (Jarvis wasn't running in time)`
+          : `${ev.title} failed: ${ev.error}` + (ev.retry_in_minutes ? ` · retrying in ${ev.retry_in_minutes} min` : "");
+        log.append(el("div", "note err", "· " + msg)); scrollLog();
+        host.notify("Jarvis routine", msg);
+      } else if (ev.status === "done") {
+        log.append(el("div", "note", `· ${ev.title}: ${ev.summary}`)); scrollLog();
+      }
+    }
     else if (ev.type === "window") renderWindow(ev.window);
     else if (ev.type === "window_closed") dropWindow(ev.id);
     else if (ev.type === "start") {

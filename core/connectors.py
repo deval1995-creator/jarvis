@@ -97,11 +97,13 @@ DISALLOWED_TOOLS = [_prefix(s) + t for group in (BLOCKED_TOOLS, UNUSED_TOOLS)
                     for s, tools in group.items() for t in tools]
 # Claude Code's built-in web tools (part of the Pro plan): search, and read a page.
 WEB_TOOLS = ["WebSearch", "WebFetch"]
+# Jarvis's own web tools (Tavily): also text written by strangers.
+OWN_WEB_TOOLS = ["mcp__tools__search", "mcp__tools__read_page"]
 
 
 def reads_outside_content(tool_name: str) -> bool:
     """Tools whose results contain text other people wrote (emails, invites, web pages)."""
-    return tool_name in _READ_SET or tool_name in WEB_TOOLS
+    return tool_name in _READ_SET or tool_name in WEB_TOOLS or tool_name in OWN_WEB_TOOLS
 
 
 async def deny_unlisted(tool_name: str, tool_input: dict, context) -> PermissionResultDeny:

@@ -3,7 +3,8 @@
 Direct, fast data sources: weather (Open-Meteo), web search and page reading
 (Tavily). Claude Code's WebSearch/WebFetch remain as the slower fallback.
 
-Tool names as Claude sees them: mcp__tools__weather, mcp__tools__search, mcp__tools__read_page.
+Tool names as Claude sees them: mcp__tools__weather, mcp__tools__search, mcp__tools__read_page,
+mcp__tools__places (Google Maps data).
 """
 
 from __future__ import annotations
@@ -12,11 +13,12 @@ import json
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+from core import places as gplaces
 from core import tavily
 from core import weather as wx
 
 SERVER_NAME = "tools"
-TOOL_NAMES = ["weather", "search", "read_page"]
+TOOL_NAMES = ["weather", "search", "read_page", "places"]
 ALLOWED_TOOLS = [f"mcp__{SERVER_NAME}__{n}" for n in TOOL_NAMES]
 
 
@@ -96,4 +98,33 @@ def build_tools_server():
             return {"content": [{"type": "text", "text": f"Page reading unavailable ({e}). Use WebFetch instead."}],
                     "is_error": True}
 
-    return create_sdk_mcp_server(name=SERVER_NAME, version="1.0.0", tools=[weather, search, read_page])
+    @tool(
+        "places",
+        "Find places nearby with Google Maps data in under a second: restaurants, cafes, shops, gyms, clinics, "
+        "anything. Returns rating and review count, price level, open now and today's hours, distance, "
+        "address, phone, website and a Maps link. Near defaults to Deval's home (Whitby, Ontario). Use this, "
+        "not web search, for anything local.",
+        {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What to find, e.g. 'Indian restaurant', 'late night pharmacy'"},
+                "near": {"type": "string", "description": "Town or area; omit for home"},
+                "region": {"type": "string", "description": "Province/state or country for 'near', if ambiguous"},
+                "open_now": {"type": "boolean"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20},
+                "radius_km": {"type": "number", "description": "Search radius (default 15 km)"},
+            },
+            "required": ["query"],
+        },
+    )
+    async def places(args):
+        try:
+            return _ok(await gplaces.search_async(
+                args["query"], args.get("near"), args.get("region"), bool(args.get("open_now")),
+                args.get("max_results") or 6, args.get("radius_km") or 15))
+        except (gplaces.PlacesError, wx.WeatherError) as e:
+            return {"content": [{"type": "text", "text": str(e)}], "is_error": True}
+        except Exception as e:
+            return {"content": [{"type": "text", "text": f"Places search unavailable: {e}"}], "is_error": True}
+
+    return create_sdk_mcp_server(name=SERVER_NAME, version="1.0.0", tools=[weather, search, read_page, places])

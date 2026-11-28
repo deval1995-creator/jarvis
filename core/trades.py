@@ -276,8 +276,8 @@ class TradeWatcher:
             offer = self.rules.offer
             for e in events:
                 if e["kind"] == "entry" and offer and offer.get("allowed"):
-                    e["text"] += " Arm the trade rules?"
-                    e["say"] += " Shall I arm the trade rules?"
+                    e["text"] += " Arm the rules?"
+                    e["say"] += " Shall I arm the rules?"
         await self._send(actions)
         for e in events + rule_events:
             await self._say(e)

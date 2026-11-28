@@ -133,7 +133,7 @@ def test_entry_asks_to_arm_and_arming_sends_pt1():
     paper = lambda s: {**s, "broker_id": "paper", "broker": "Paper Trading"}  # noqa: E731
     asyncio.run(w.handle(paper(snap())))
     asyncio.run(w.handle(paper(snap([pos(qty=2)], [STOP]))))
-    assert said[-1].endswith("Shall I arm the trade rules?")
+    assert said[-1].endswith("Shall I arm the rules?")
     assert w.status()["rules"]["state"] == "offered"
     res = asyncio.run(w.rules_action("arm"))
     assert res["ok"] and w.status()["rules"]["state"] == "armed"
@@ -188,4 +188,4 @@ def test_rules_sale_is_not_also_announced_as_a_trim():
     w.rules.settle_until = 0
     said.clear()
     asyncio.run(w.handle(paper(snap([pos(qty=1)], [STOP], [{**fill(9, "sell", 1, "limit", 4.54), "id": "pt1"}]))))
-    assert not any(t.startswith("Trimmed") for t in said) and any("PT1 filled" in t for t in said)
+    assert not any(t.startswith("Trimmed") for t in said) and any("PT1 sold" in t for t in said)

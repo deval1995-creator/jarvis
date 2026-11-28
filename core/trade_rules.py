@@ -172,25 +172,23 @@ class RuleBook:
         self.offer = None
         p, c = self.plan, self.cfg
         if p.n0 == 1:
-            text = "Trade rules armed: one contract, so only the time exit applies."
+            text = "Armed, sir. One contract: just the time exit."
         elif p.n0 == 2:
-            text = (f"Trade rules armed: PT1 sells 1 at {p2(p.pt_price(1, c))}, then the runner's stop goes to "
-                    f"{p2(up(p.avg + c['be_offset'], c['tick']))} and trails from {p2(up(p.avg * (1 + c['trail_start']), c['tick']))}.")
+            text = f"Armed, sir. PT1 at {p2(p.pt_price(1, c))}, then I trail the runner."
         else:
-            text = (f"Trade rules armed: PT1 sells 1 at {p2(p.pt_price(1, c))}, PT2 sells 1 at {p2(p.pt_price(2, c))}, "
-                    f"then the runner trails.")
+            text = f"Armed, sir. PT1 at {p2(p.pt_price(1, c))}, PT2 at {p2(p.pt_price(2, c))}, then I trail the runner."
         self._save()
         actions, events = self.step(snap, now)
-        return actions, [self._ev("Trade rules armed", text)] + events, None
+        return actions, [self._ev("Rules armed", text)] + events, None
 
-    def disarm(self, why: str = "Trade rules off.") -> tuple[list[dict], list[dict]]:
+    def disarm(self, why: str = "Rules off, sir.") -> tuple[list[dict], list[dict]]:
         if not self.plan:
             self.offer = None
             return [], []
         actions = self._cancel_my_pts(self.last_snap)
         self.plan = None
         self._save()
-        return actions, [self._ev("Trade rules off", why + (" I've cancelled my profit orders." if actions else ""))]
+        return actions, [self._ev("Rules off", why + (" Profit orders cancelled." if actions else ""))]
 
     def decline(self) -> None:
         if self.offer:
@@ -220,7 +218,7 @@ class RuleBook:
         if pos is None:  # closed: tidy up my orders, done
             acts = self._cancel_my_pts(snap) + [self._act("cancel", id=o["id"], symbol=p.symbol)
                                                  for o in mine if o["id"] == p.stop_id or p.closing]
-            ev = self._ev("Trade rules done", "Position closed; trade rules done.", speak=False)
+            ev = self._ev("Rules done", "Trade closed. Rules off.", speak=False)
             self.plan = None
             self._save()
             return self._send(acts, now), [ev]
@@ -275,7 +273,7 @@ class RuleBook:
             err = res.get("error") or "rejected"
             if a["cmd"] == "modify" and p and a.get("fallback"):  # e.g. IBKR won't resize a bracket child: replace it
                 return self._send([self._act("cancel", id=a["id"], symbol=a["symbol"], then=dict(a["fallback"]))], now), []
-            return [], [self._ev("Order failed", f"I couldn't {a['what']}: {err}.", level="warn")]
+            return [], [self._ev("Order failed", f"Sir, I couldn't {a['what']}: {err}.", level="warn")]
         if a["cmd"] == "cancel" and a.get("then") and p:
             return self._send([self._act(**a["then"])], now), []
         if not p:
@@ -283,7 +281,8 @@ class RuleBook:
         if a["cmd"] == "place" and a.get("pt"):
             p.pt_ids[str(a["pt"])] = res.get("id")
             self._save()
-            return [], [self._ev("Profit order set", f"PT{a['pt']} set: sell {a['qty']} at {p2(a['price'])}.")]
+            return [], [self._ev(f"PT{a['pt']} placed", f"PT{a['pt']} waiting at {p2(a['price'])}.",
+                                 speak=a["pt"] != 1)]  # PT1's price was just said when arming
         if a["cmd"] in ("place", "modify") and a.get("kind", "stop") == "stop":
             first = p.stop_price is None
             p.stop_id = res.get("id") or a.get("id")
@@ -291,15 +290,18 @@ class RuleBook:
             if a.get("swap"):
                 p.swap_done = True
                 self._save()
-                return [], [self._ev("Stop ready", f"Your stop at {p2(a['price'])} is now a standalone order, so I can "
-                                                   "move it later without a gap.", speak=False)]
+                return [], [self._ev("Stop ready", f"Stop {p2(a['price'])} now standalone, ready to move.", speak=False)]
             self._save()
-            what = spoken_contract(p.symbol, a["qty"], p.name)
             if a.get("trail"):
-                return [], [self._ev("Stop raised", f"Stop up to {p2(a['price'])}.", level="info")]
+                return [], [self._ev("Trailing", f"Trailing. Stop up to {p2(a['price'])}.")]
+            if p.k == 1:
+                return [], [self._ev("Stop moved", f"Stop to break-even: {p2(a['price'])}.")]
+            if p.k >= 2:
+                return [], [self._ev("Stop moved", f"Runner locked at {p2(a['price'])}.")]
+            what = spoken_contract(p.symbol, a["qty"], p.name)
             return [], [self._ev("Stop moved", f"Stop {'set' if first else 'moved'} to {p2(a['price'])} on {what}.")]
         if a["cmd"] == "close":
-            return [], [self._ev("Time exit", f"It's {self._exit_time_text(now)}: closed the position at market.")]
+            return [], [self._ev("Time exit", f"{self._exit_time_text(now)}, sir. Closed you out at market.")]
         return [], []
 
     # ---------- internals ----------
@@ -417,8 +419,8 @@ class RuleBook:
         self.plan = None
         self.mismatch_since = None
         self._save()
-        text = f"You've taken over ({why}); I've stepped back." + (" I've cancelled my profit orders." if acts else "")
-        return self._send(acts, time.time()), [self._ev("Trade rules off", text, level="warn")]
+        text = f"Understood, sir: {why}. I've stepped back." + (" Profit orders cancelled." if acts else "")
+        return self._send(acts, time.time()), [self._ev("Rules off", text, level="warn")]
 
     def _cancel_my_pts(self, snap: dict | None) -> list[dict]:
         p = self.plan
@@ -438,7 +440,7 @@ class RuleBook:
         p, c = self.plan, self.cfg
         fill = next((f for f in snap.get("fills") or [] if f.get("id") == p.pt_ids.get(str(n))), None)
         at = p2((fill or {}).get("avg") or p.pt_price(n, c))
-        return self._ev(f"PT{n} filled", f"PT{n} filled at {at}.")
+        return self._ev(f"PT{n} sold", f"PT{n} sold, sir. 1 at {at}.")
 
     def _past_exit(self, now: float) -> bool:
         t = self._exit_dt(now)
@@ -478,7 +480,7 @@ class RuleBook:
         for req, a in list(self.inflight.items()):
             if now - a["sent_at"] > self.cfg["timeout_s"]:
                 self.inflight.pop(req)
-                late.append(self._ev("Order not confirmed", f"No answer when I tried to {a['what']}; I'll check again.", level="warn"))
+                late.append(self._ev("Order not confirmed", f"Sir, no answer on {a['what']}. Checking.", level="warn"))
         return late
 
     def _ev(self, title: str, text: str, level: str = "info", speak: bool = True) -> dict:

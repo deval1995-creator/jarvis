@@ -175,7 +175,7 @@ def build_tools_server(board=None, browser: br.Browser | None = None, conn=None,
     @tool("trade_rules", "Arm or disarm Deval's trade-management rules for the position he's in (PT1 +10% sells 1, "
           "stop to break-even, PT2 +25% on 3 contracts, trailing runner, out by 15:30). Code then manages the trade; "
           "you never place orders yourself. Use 'arm' ONLY when Deval's latest message clearly says to arm them "
-          "(e.g. 'yes' right after Jarvis asked 'Shall I arm the trade rules?', or 'arm the rules'); 'disarm' when he "
+          "(e.g. 'yes' right after Jarvis asked 'Shall I arm the rules?', or 'arm the rules'); 'disarm' when he "
           "says stop/disarm/turn off the rules; 'decline' when he says no to arming. Check trade_status first if "
           "unsure what a bare 'yes' refers to: rules.state 'offered' means the question is open.",
           {"type": "object", "properties": {"action": {"type": "string", "enum": ["arm", "disarm", "decline"]}},

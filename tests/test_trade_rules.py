@@ -111,13 +111,14 @@ def stops(b):
 
 def test_three_contracts_full_run():
     book, b, ev, now = armed(3)
-    assert "PT1 set: sell 1 at 4.40." in texts(ev)
+    assert "PT1 waiting at 4.40." in texts(ev)
     b.move(4.40)                                    # PT1 fills
     ev, now = run(book, b, now)
     assert b.qty == 2
     [s] = stops(b)
     assert (s["qty"], s["stop"]) == (2, 4.03)       # break-even + 0.03 on the rest
-    assert "PT1 filled at 4.40." in texts(ev) and "PT2 set: sell 1 at 5.00." in texts(ev)
+    assert "PT1 sold, sir. 1 at 4.40." in texts(ev) and "PT2 waiting at 5.00." in texts(ev)
+    assert "Stop to break-even: 4.03." in texts(ev)
     b.move(5.00)                                    # PT2 fills
     ev, now = run(book, b, now)
     [s] = stops(b)
@@ -167,7 +168,7 @@ def test_bracket_that_cant_be_resized_is_replaced():
     ev, now = run(book, b, now)
     [s] = stops(b)
     assert (s["qty"], s["stop"], s["parent"]) == (1, 4.03, None)
-    assert any("Stop moved to 4.03 on 1 QQQ 640 put" in t for t in texts(ev))
+    assert "Stop to break-even: 4.03." in texts(ev)
 
 
 def test_moving_the_stop_yourself_hands_over():
@@ -177,7 +178,7 @@ def test_moving_the_stop_yourself_hands_over():
     [s] = stops(b)
     s["stop"] = 3.90                                # Deval drags the stop
     ev, now = run(book, b, now)
-    assert book.plan is None and any("taken over" in t for t in texts(ev))
+    assert book.plan is None and "Understood, sir: you moved the stop. I've stepped back. Profit orders cancelled." in texts(ev)
     assert not [o for o in b.orders.values() if o["type"] == "limit"]  # my PT2 cancelled
     assert stops(b)[0]["stop"] == 3.90              # his stop left alone
 

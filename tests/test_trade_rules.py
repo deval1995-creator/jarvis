@@ -275,3 +275,44 @@ def test_stop_moved_by_him_before_pt1_is_followed_not_a_takeover():
     b.move(4.40)
     ev, now = run(book, b, now)
     assert book.plan is not None and stops(b)[0]["stop"] == 4.03
+
+
+def test_tonights_takeover_stop_shrinks_then_is_cancelled_when_flat():
+    """3 SOL, PT1 sold, then he market-sold 1.9999 himself: his stop for 2 would have opened a short."""
+    book, b, ev, now = armed(3)
+    b.move(4.40)
+    ev, now = run(book, b, now)
+    assert b.qty == 2 and stops(b)[0]["qty"] == 2
+    b.qty = 0.0001                                   # his market sell of 1.9999
+    ev, now = run(book, b, now + 10)
+    assert book.plan is None
+    [s] = stops(b)
+    assert s["qty"] == 0.0001 and s["stop"] == 4.03  # shrunk to what he holds, same price
+    assert any("Shrunk it to match" in t for t in texts(ev))
+    b.qty = 0                                        # he closes the rest; the stop is left over
+    ev, now = run(book, b, now)
+    assert not stops(b) and any("Cancelled the leftover stop at 4.03" in t for t in texts(ev))
+    assert book.guard is None
+
+
+def test_stop_shrink_falls_back_to_replace():
+    book, b, ev, now = armed(2)
+    b.move(4.40)
+    ev, now = run(book, b, now)
+    b.fill_market(0.5)                               # he sells half a contract's worth (crypto-style)
+    ev, now = run(book, b, now + 10)
+    b.reject_modify = True
+    b.qty = 0.25
+    ev, now = run(book, b, now)
+    [s] = stops(b)
+    assert s["qty"] == 0.25 and any("Replaced it to match" in t for t in texts(ev))
+
+
+def test_guard_leaves_a_right_sized_stop_alone():
+    book, b, ev, now = armed(3)
+    b.move(4.40)
+    ev, now = run(book, b, now)
+    [s] = stops(b)
+    s["stop"] = 3.90                                 # he moves his stop: takeover, but the size is right
+    ev, now = run(book, b, now)
+    assert book.plan is None and stops(b)[0]["qty"] == 2 and stops(b)[0]["stop"] == 3.90

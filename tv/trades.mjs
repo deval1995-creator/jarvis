@@ -133,7 +133,7 @@ const EXEC = (cmd, allowed) => `(async (cmd, allowed) => {
   if (pos.side !== 1) return { ok: false, error: 'only long positions are managed' };
   const held = Math.abs(pos.qty);
   const q = Number(cmd.qty);
-  if (!(q > 0) || q > held || !Number.isInteger(q)) return { ok: false, error: 'quantity ' + cmd.qty + ' vs ' + held + ' held' };
+  if (!(q > 0) || q > held + 1e-9) return { ok: false, error: 'quantity ' + cmd.qty + ' vs ' + held + ' held' };
   const px = Number(cmd.price);
   if (cmd.cmd === 'place') {
     if (cmd.kind !== 'limit' && cmd.kind !== 'stop') return { ok: false, error: 'only limit and stop orders' };

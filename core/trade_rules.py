@@ -129,6 +129,7 @@ class RuleBook:
         self.last_warn = 0.0
         self._req = itertools.count(1)
         self.restored: dict | None = store.load() if store else None
+        self.guard: str | None = None  # after he takes over: keep his stops no bigger than what he holds
 
     # ---------- public state ----------
 
@@ -211,6 +212,8 @@ class RuleBook:
             self._restore(snap)
         if not self.plan:
             self._update_offer(snap)
+            if self.guard and not self.inflight and now >= self.settle_until:
+                return self._guard(snap, now)
             return [], []
         p, c = self.plan, self.cfg
         pos = next((x for x in snap.get("positions") or [] if x["symbol"] == p.symbol), None)
@@ -228,9 +231,12 @@ class RuleBook:
             return [], []
 
         # what changed since last time?
-        q = int(pos["qty"])
+        q = float(pos["qty"])
         if pos["side"] != "long" or q > p.qty_now:
             return self._takeover("you added to or changed the position")
+        if q != int(q):
+            return self._takeover("you sold part of the position yourself")
+        q = int(q)
         if q < p.qty_now:
             # a profit order of mine must have filled, one step per contract
             # filled = my profit order has left the working list (or shows as filled)
@@ -271,11 +277,14 @@ class RuleBook:
         ok = bool(res.get("ok"))
         if not ok:
             err = res.get("error") or "rejected"
-            if a["cmd"] == "modify" and p and a.get("fallback"):  # e.g. IBKR won't resize a bracket child: replace it
-                return self._send([self._act("cancel", id=a["id"], symbol=a["symbol"], then=dict(a["fallback"]))], now), []
+            if a["cmd"] == "modify" and (p or a.get("guard")) and a.get("fallback"):  # e.g. IBKR won't resize a bracket child: replace it
+                return self._send([self._act("cancel", id=a["id"], symbol=a["symbol"], guard=a.get("guard"),
+                                             then=dict(a["fallback"]))], now), []
             return [], [self._ev("Order failed", f"Sir, I couldn't {a['what']}: {err}.", level="warn")]
-        if a["cmd"] == "cancel" and a.get("then") and p:
+        if a["cmd"] == "cancel" and a.get("then") and (p or a.get("guard")):
             return self._send([self._act(**a["then"])], now), []
+        if a.get("done"):  # the stop guard's own message, once it worked
+            return [], [self._ev("Stop fixed", a["done"], level="warn")]
         if not p:
             return [], []
         if a["cmd"] == "place" and a.get("pt"):
@@ -416,11 +425,41 @@ class RuleBook:
 
     def _takeover(self, why: str) -> tuple[list[dict], list[dict]]:
         acts = self._cancel_my_pts(self.last_snap)
+        self.guard = self.plan.symbol
+        self.settle_until = 0.0
         self.plan = None
         self.mismatch_since = None
         self._save()
         text = f"Understood, sir: {why}. I've stepped back." + (" Profit orders cancelled." if acts else "")
         return self._send(acts, time.time()), [self._ev("Rules off", text, level="warn")]
+
+    def _guard(self, snap: dict, now: float) -> tuple[list[dict], list[dict]]:
+        """After he takes over: a sell stop bigger than his position would open a short if hit.
+        Shrink it to what he holds, or cancel it once he's flat. Only ever reduces risk."""
+        sym = self.guard
+        pos = next((x for x in snap.get("positions") or [] if x["symbol"] == sym), None)
+        held = float(pos["qty"]) if pos and pos["side"] == "long" else 0.0
+        sells = [o for o in snap.get("working") or [] if o["symbol"] == sym and o["side"] == "sell"]
+        acts = []
+        for o in sells:
+            size = float(o.get("qty") or 0)
+            if size <= held + EPS:
+                continue
+            px = o.get("stop") if o["type"] in ("stop", "stop_limit") else o.get("limit")
+            if held <= EPS:
+                acts.append(self._act("cancel", id=o["id"], symbol=sym, guard=True, what=f"cancel the leftover order at {p2(px)}",
+                                      done=f"You're flat, sir. Cancelled the leftover {o['type'].replace('_', '-')} at {p2(px)}."))
+            elif o["type"] in ("stop", "stop_limit"):
+                n = f"{held:g}"
+                acts.append(self._act("modify", id=o["id"], symbol=sym, qty=held, price=o.get("stop"), guard=True,
+                                      what=f"shrink your stop to {n}",
+                                      done=f"Sir, your stop was for {size:g}; you hold {n}. Shrunk it to match.",
+                                      fallback={"cmd": "place", "symbol": sym, "kind": "stop", "qty": held, "price": o.get("stop"),
+                                                "guard": True, "what": f"replace your stop for {n}",
+                                                "done": f"Sir, your stop was for {size:g}; you hold {n}. Replaced it to match."}))
+        if not acts and held <= EPS:
+            self.guard = None  # flat and nothing left working: done
+        return self._send(acts, now), []
 
     def _cancel_my_pts(self, snap: dict | None) -> list[dict]:
         p = self.plan

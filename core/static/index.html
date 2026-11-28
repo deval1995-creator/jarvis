@@ -841,6 +841,7 @@ if (voice.wantsOn && localStorage.getItem("voiceMode")) voice.connect();
 let posState = null;
 const usd = (x, sign = true) => x == null ? "–" : (sign ? (x > 0 ? "+" : x < 0 ? "−" : "") : (x < 0 ? "−" : "")) + "$" + Math.abs(Math.round(x)).toLocaleString();
 const px = (x) => x == null ? "–" : x.toFixed(2);
+const usdc = (x) => x == null ? "–" : (x > 0 ? "+" : x < 0 ? "−" : "") + "$" + Math.abs(x).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });  // cents, as TradingView shows it
 const dur = (sec) => { sec = Math.max(0, Math.floor(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60; return (h ? h + "h " : "") + (h || m ? m + "m " : "") + s + "s"; };
 function renderPosition(st) {
   posState = st;
@@ -865,7 +866,7 @@ function renderPosition(st) {
     const box = el("div", "pos");
     const top = el("div", "pos-top");
     top.append(el("span", "pos-sym", p.name), el("span", "pos-side " + (p.side === "long" ? "upc" : "downc"), `${p.side.toUpperCase()} ${p.qty}`));
-    const pnl = el("div", "pos-pnl " + c, usd(p.pl));
+    const pnl = el("div", "pos-pnl " + c, usdc(p.pl));
     if (p.pl_pct != null) pnl.append(el("small", "", (p.pl_pct >= 0 ? "+" : "") + (p.pl_pct * 100).toFixed(1) + "%"));
     box.append(top, pnl);
     if (p.stop != null && p.target != null && p.now != null) {

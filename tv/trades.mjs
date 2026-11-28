@@ -1,10 +1,12 @@
 // Jarvis's trade watcher: reads your broker positions and orders from TradingView Desktop.
 //
 // TradingView keeps its broker connection (Interactive Brokers) in the page, whether or not
-// the trading panel is open. Every 2 s this reads positions, working orders, today's fills
-// and the account's daily P&L, and prints one JSON line to stdout when anything changed
-// (and a heartbeat every 20 s). READ-ONLY: it never places, changes or cancels anything,
-// and never clicks in TradingView.
+// the trading panel is open. This listens to TradingView's own live feeds: the position
+// service (fires on every P&L tick from the broker) and the quote stream for each open
+// contract (the same last price TradingView shows). Any change is pushed out within ~150 ms;
+// it also reads every 1 s as a backstop (every 300 ms while in a trade). One JSON line goes to
+// stdout per change, plus a heartbeat every 20 s. READ-ONLY: it never places, changes or
+// cancels anything, and never clicks in TradingView.
 //
 //   node tv/trades.mjs            watch (the Core runs this and reads the lines)
 //   node tv/trades.mjs once       one snapshot, then exit
@@ -13,7 +15,30 @@ const BRIDGE = (process.env.JARVIS_TV_MCP || 'C:/Users/deval/OneDrive/Desktop/Te
 const { createRequire } = await import('node:module');
 const CDP = createRequire(`${BRIDGE}/package.json`)('chrome-remote-interface');
 const HOST = '127.0.0.1', PORT = Number(process.env.JARVIS_TV_PORT || 9222);
-const EVERY_MS = 2000, HEARTBEAT_MS = 20000, RETRY_MS = 10000;
+const IDLE_MS = 1000, IN_TRADE_MS = 300, HEARTBEAT_MS = 20000, RETRY_MS = 10000;
+const BINDING = '__jarvisTradesPush';
+
+// Runs inside TradingView: hooks TradingView's live feeds (idempotent). Listeners only record
+// quotes and ping us (throttled); they never act on the account.
+const LISTEN = `(() => {
+  const api = window.TradingViewApi;
+  const t = api && typeof api.trading === 'function' ? api.trading() : null;
+  const ab = t && t._activeBroker;
+  const b = ab && typeof ab.value === 'function' ? ab.value() : ab;
+  const svc = t && t._positionService;
+  if (!b || !svc) return false;
+  const J = window.__jarvisTrades || (window.__jarvisTrades = { quotes: {}, subs: new Map(), timer: 0 });
+  J.ping = () => { if (J.timer) return; J.timer = setTimeout(() => { J.timer = 0; try { window.${BINDING} && window.${BINDING}('1'); } catch {} }, 120); };
+  if (J.svc !== svc) {
+    try { J.svc && J.svc.positionUpdate().unsubscribe(J, J.onPos); J.svc && J.svc.positionsRemoved().unsubscribe(J, J.onPos); } catch {}
+    J.onPos = () => J.ping();
+    svc.positionUpdate().subscribe(J, J.onPos);
+    svc.positionsRemoved().subscribe(J, J.onPos);
+    J.svc = svc;
+  }
+  if (J.broker !== b) { J.subs.clear(); J.quotes = {}; J.broker = b; }
+  return true;
+})()`;
 
 // Runs inside TradingView. Returns plain data only.
 const SNAPSHOT = `(async () => {
@@ -30,13 +55,32 @@ const SNAPSHOT = `(async () => {
   const num = (x) => (typeof x === 'number' && isFinite(x) ? x : null);
   const [positions, orders] = await Promise.all([b.positions(), b.orders()]);
   const svc = t._positionService;
+  const J = window.__jarvisTrades;
+  const live = (sym) => {  // the quote TradingView streams for this contract: last trade, else mid
+    const q = J && J.quotes[sym];
+    if (!q) return null;
+    if (num(q.trade) !== null) return q.trade;
+    return num(q.bid) !== null && num(q.ask) !== null ? +((q.bid + q.ask) / 2).toFixed(4) : null;
+  };
   const open = (positions || []).filter((p) => p && p.qty).map((p) => {
-    let pl = num(p.pl);
-    if (pl === null) { try { pl = num(svc.find(p.id)?.pl); } catch {} }
-    if (pl === null && typeof b.subscribePL === 'function') { try { b.subscribePL(p.id); } catch {} }  // what the panel does to get P&L
+    let pl = null;
+    try { pl = num(svc.find(String(p.id))?.pl); } catch {}  // the P&L TradingView's own panel shows, live from the broker
+    if (pl === null) pl = num(p.pl);
     return { id: String(p.id), symbol: p.symbol, name: p.symbolDisplayName || p.symbol, qty: Math.abs(p.qty),
-             side: p.side === -1 ? 'short' : 'long', avg: num(p.avgPrice), pl, last: num(p.last) };
+             side: p.side === -1 ? 'short' : 'long', avg: num(p.avgPrice), pl, last: live(p.symbol) ?? num(p.last) };
   });
+  if (J) {  // stream quotes for open contracts only
+    const want = new Set(open.map((p) => p.symbol));
+    for (const sym of want) if (!J.subs.has(sym)) {
+      const fn = (s, d) => { J.quotes[sym] = Object.assign(J.quotes[sym] || {}, d); J.ping(); };
+      J.subs.set(sym, fn);
+      try { b.subscribeRealtime(sym, fn); } catch {}
+    }
+    for (const [sym, fn] of [...J.subs]) if (!want.has(sym)) {
+      try { b.unsubscribeRealtime(sym, fn); } catch {}
+      J.subs.delete(sym); delete J.quotes[sym];
+    }
+  }
   const TYPE = { 1: 'limit', 2: 'market', 3: 'stop', 4: 'stop_limit' };
   const o = (orders || []).map((x) => ({
     id: String(x.id), symbol: x.symbol, name: x.symbolDisplayName || x.symbol, type: TYPE[x.type] || String(x.type),
@@ -66,6 +110,12 @@ async function connect() {
   return CDP({ host: HOST, port: PORT, target: tabs[0].id });
 }
 
+async function listen(c, onPush) {
+  try { await c.Runtime.addBinding({ name: BINDING }); } catch {}
+  c.on('Runtime.bindingCalled', (e) => { if (e.name === BINDING) { if (process.env.JARVIS_TRADES_DEBUG) process.stderr.write('push\n'); onPush(); } });
+  return c.Runtime.evaluate({ expression: LISTEN, returnByValue: true }).then((r) => r.result?.value === true).catch(() => false);
+}
+
 async function snapshot(c) {
   const r = await c.Runtime.evaluate({ expression: SNAPSHOT, returnByValue: true, awaitPromise: true, timeout: 10000 });
   if (r.exceptionDetails) return { status: 'error', error: String(r.exceptionDetails.exception?.description || r.exceptionDetails.text).slice(0, 300) };
@@ -85,13 +135,20 @@ async function watch() {
     let c;
     try {
       c = await connect();
-      let closed = false;
-      c.on('disconnect', () => { closed = true; });
+      let closed = false, wake = null, pushed = false, hooked = false;
+      c.on('disconnect', () => { closed = true; wake?.(); });
+      await c.Runtime.enable();
+      hooked = await listen(c, () => { pushed = true; wake?.(); });
       while (!closed) {
+        if (!hooked) hooked = (await c.Runtime.evaluate({ expression: LISTEN, returnByValue: true })).result?.value === true;
+        else await c.Runtime.evaluate({ expression: LISTEN, returnByValue: true });  // re-hook if TradingView swapped the broker
+        pushed = false;
         const s = await snapshot(c);
         const key = JSON.stringify(s);
         if (key !== last || Date.now() - lastAt > HEARTBEAT_MS) { out(s); last = key; lastAt = Date.now(); }
-        await new Promise((r) => setTimeout(r, EVERY_MS));
+        const wait = s.positions && s.positions.length ? IN_TRADE_MS : IDLE_MS;
+        if (!pushed) await new Promise((r) => { wake = r; setTimeout(r, wait); });
+        wake = null;
       }
     } catch (e) {
       const s = { status: 'no_tv', error: e.code === 'no_chart' ? 'no chart open' : e.message };

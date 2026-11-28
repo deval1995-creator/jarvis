@@ -108,3 +108,49 @@ def test_watcher_broadcasts_and_announces(monkeypatch):
     assert said == ["You're in, sir: long 5 QQQ 640 puts at 4.12, stop 3.19, target 5.91."]
     assert sent[-1]["type"] == "position" and sent[-1]["positions"][0]["qty"] == 5
     assert tr.describe(w.status())["positions"][0]["since_et"]
+
+
+def test_entry_asks_to_arm_and_arming_sends_pt1():
+    from core.trade_rules import DEFAULTS, RuleBook
+
+    said, lines = [], []
+
+    class Pipe:
+        def write(self, b):
+            lines.append(b.decode())
+
+        async def drain(self):
+            pass
+
+    class Proc:
+        stdin = Pipe()
+
+    async def announce(title, text, level="info", speak=None):
+        said.append(speak)
+
+    w = tr.TradeWatcher(announce=announce, rules=RuleBook({**DEFAULTS, "time_exit": False}))
+    w.proc = Proc()
+    paper = lambda s: {**s, "broker_id": "paper", "broker": "Paper Trading"}  # noqa: E731
+    asyncio.run(w.handle(paper(snap())))
+    asyncio.run(w.handle(paper(snap([pos(qty=2)], [STOP]))))
+    assert said[-1].endswith("Shall I arm the trade rules?")
+    assert w.status()["rules"]["state"] == "offered"
+    res = asyncio.run(w.rules_action("arm"))
+    assert res["ok"] and w.status()["rules"]["state"] == "armed"
+    import json
+    cmd = json.loads(lines[0])
+    assert (cmd["cmd"], cmd["kind"], cmd["qty"], cmd["price"]) == ("place", "limit", 1, 4.54)
+
+
+def test_live_broker_is_not_asked_to_arm():
+    from core.trade_rules import DEFAULTS, RuleBook
+
+    said = []
+
+    async def announce(title, text, level="info", speak=None):
+        said.append(speak)
+
+    w = tr.TradeWatcher(announce=announce, rules=RuleBook(dict(DEFAULTS)))
+    asyncio.run(w.handle({**snap(), "broker_id": "IBKR"}))
+    asyncio.run(w.handle({**snap([pos(qty=2)], [STOP]), "broker_id": "IBKR"}))
+    assert "arm" not in said[-1]

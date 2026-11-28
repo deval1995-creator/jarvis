@@ -144,6 +144,10 @@
   .pos-grid .k { color: var(--dim, #7fa3b8); letter-spacing: .1em; font-size: 10px; text-transform: uppercase; align-self: center; }
   .pos-grid .v { color: #e6f6ff; } .pos-grid .d { text-align: right; }
   .pos-msg { font-size: 13px; margin: 4px 0; }
+  .rules { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .rules .rules-txt { flex: 1; font-size: 11px; color: var(--dim, #7fa3b8); letter-spacing: .05em; }
+  .rules.armed .rules-txt { color: #3ddc97; }
+  .rules button { padding: 3px 8px; font-size: 10px; }
   .pos-foot { margin-top: 8px; font-size: 11px; color: var(--dim, #7fa3b8); display: flex; justify-content: space-between; gap: 8px; }
   .dev { display: block; margin-bottom: 8px; }
   .dev span { display: block; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim, #7fa3b8); margin-bottom: 3px; }
@@ -892,7 +896,33 @@ function renderPosition(st) {
     box.append(foot);
     body.append(box);
   }
+  renderRules(st.rules || {});
   tickSince();
+}
+function ruleNote(t) { log.append(el("div", "note warnnote", "· Trade rules: " + t)); scrollLog(); }
+// Deval's trade rules for this position: arm / disarm (the rules are code in the Core)
+function renderRules(r) {
+  if (!r.state || r.state === "off") return;
+  const box = el("div", "rules " + r.state);
+  const act = (label, action, cls = "") => {
+    const b = el("button", cls, label);
+    b.onclick = async () => {
+      b.disabled = true;
+      try { const res = await api(`/api/trade_rules/${action}`, { method: "POST" }); if (!res.ok && res.error) ruleNote(res.error); }
+      catch (e) { ruleNote(e.message); }
+    };
+    return b;
+  };
+  if (r.state === "offered") {
+    if (!r.allowed) { box.append(el("span", "rules-txt", `Trade rules: ${(r.brokers || []).join(", ")} only for now`)); }
+    else { box.append(el("span", "rules-txt", "Trade rules: not armed"), act("Arm rules", "arm", "primary"), act("No", "decline")); }
+  } else {
+    const steps = (r.steps || []).map((x) => (x.done ? "✓ " : "") + x.label);
+    if (r.trailing) steps.push("trailing");
+    else if (r.stop != null) steps.push("stop " + r.stop.toFixed(2));
+    box.append(el("span", "rules-txt", "RULES ARMED · " + (steps.join(" · ") || "time exit only")), act("Disarm", "disarm"));
+  }
+  $("posbody").append(box);
 }
 function tickSince() {
   document.querySelectorAll("#posbody .since").forEach((n) => { if (n.dataset.since) n.textContent = "In trade " + dur(Date.now() / 1000 - Number(n.dataset.since)); });

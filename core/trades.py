@@ -1,9 +1,10 @@
 """Are you in a trade? Watches your broker positions through TradingView Desktop.
 
-`tv/trades.mjs` reads TradingView's broker connection (Interactive Brokers) every 2 s:
-open positions, working orders, today's fills and the daily P&L. This module turns
-those readings into the HUD's Position panel and entry / exit announcements
-(written and spoken). READ-ONLY: nothing here can place, change or cancel an order.
+`tv/trades.mjs` streams TradingView's broker connection (Interactive Brokers): open
+positions, working orders, today's fills and the daily P&L. This module turns those
+readings into the HUD's Position panel and entry / exit announcements (written and
+spoken). Orders are only ever sent by the trade rules (core/trade_rules.py), and only
+after Deval arms them for a trade.
 
 When it can't see your account (TradingView closed, broker disconnected), the panel
 says so; it never shows "flat" for a blind spot.
@@ -103,7 +104,7 @@ def day_trades(fills: list[dict]) -> int:
     """Round trips today: each time a symbol goes from flat to a position (assumes flat at the open)."""
     pos: dict[str, float] = {}
     trades = 0
-    for f in sorted(fills, key=lambda f: (f["time"], f["parent"] is not None)):
+    for f in sorted(fills, key=lambda f: (f.get("time") or 0, f.get("parent") is not None)):
         q = abs(f.get("filled") or f.get("qty") or 0) * (1 if f["side"] == "buy" else -1)
         before = pos.get(f["symbol"], 0)
         if before == 0 and q:
@@ -114,7 +115,7 @@ def day_trades(fills: list[dict]) -> int:
 
 def entry_time(pos: dict, fills: list[dict]) -> float | None:
     side = "buy" if pos["side"] == "long" else "sell"
-    times = [f["time"] for f in fills if f["symbol"] == pos["symbol"] and f["side"] == side]
+    times = [f["time"] for f in fills if f["symbol"] == pos["symbol"] and f["side"] == side and f.get("time")]
     return max(times) / 1000 if times else None
 
 
@@ -233,8 +234,11 @@ class TradeWatcher:
     """Runs tv/trades.mjs for as long as the Core runs; restarts it if it dies."""
 
     def __init__(self, broadcast: Callable[[dict], Awaitable[None]] | None = None,
-                 announce: Callable[..., Awaitable[None]] | None = None):
+                 announce: Callable[..., Awaitable[None]] | None = None, rules=None):
+        from core.trade_rules import RuleBook
+
         self.tracker = Tracker()
+        self.rules = rules or RuleBook()
         self.broadcast = broadcast
         self.announce = announce
         self.proc: asyncio.subprocess.Process | None = None
@@ -244,24 +248,72 @@ class TradeWatcher:
         if s.get("status") == "ok" and time.time() - self.tracker.updated > STALE_SECONDS:
             s = {"status": "stale", "text": STATUS_TEXT["stale"], "positions": []}
         s["updated"] = self.tracker.updated or None
+        s["rules"] = self.rules.public()
         return s
 
     async def handle(self, snap: dict) -> None:
         before = json.dumps(self._public(), sort_keys=True, default=str)
-        events = self.tracker.update(snap)
-        for e in events:
-            log.info("trade: %s", e["text"])
-            if self.announce:
-                try:
-                    await self.announce(e["title"], e["text"], level=e["level"], speak=e["say"])
-                except Exception:
-                    log.exception("trade announcement failed")
-        if self.broadcast and (events or json.dumps(self._public(), sort_keys=True, default=str) != before):
+        if snap.get("type") == "result":  # an order command answered
+            log.info("trade rules: result %s", snap)
+            actions, rule_events = self.rules.result(snap)
+            events = []
+        else:
+            actions, rule_events = self.rules.step(snap)
+            events = self.tracker.update(snap)
+            offer = self.rules.offer
+            for e in events:
+                if e["kind"] == "entry" and offer and offer.get("allowed"):
+                    e["text"] += " Arm the trade rules?"
+                    e["say"] += " Shall I arm the trade rules?"
+        await self._send(actions)
+        for e in events + rule_events:
+            await self._say(e)
+        if self.broadcast and (events or rule_events or json.dumps(self._public(), sort_keys=True, default=str) != before):
             await self.broadcast({"type": "position", **self.status()})
 
+    async def rules_action(self, action: str) -> dict:
+        """Arm, disarm or decline the trade rules (from the panel's buttons or Jarvis's tool)."""
+        err = None
+        if action == "arm":
+            actions, events, err = self.rules.arm()
+        elif action == "disarm":
+            actions, events = self.rules.disarm()
+        elif action == "decline":
+            self.rules.decline()
+            actions, events = [], []
+        else:
+            return {"ok": False, "error": f"unknown action {action}"}
+        await self._send(actions)
+        for e in events:
+            await self._say(e)
+        if self.broadcast:
+            await self.broadcast({"type": "position", **self.status()})
+        return {"ok": err is None, "error": err, "rules": self.rules.public()}
+
+    async def _send(self, actions: list[dict]) -> None:
+        for a in actions:
+            log.info("trade rules: %s", a)
+            line = {k: v for k, v in a.items() if k in ("cmd", "req", "symbol", "kind", "qty", "price", "id")}
+            try:
+                assert self.proc and self.proc.stdin
+                self.proc.stdin.write((json.dumps(line) + "\n").encode())
+                await self.proc.stdin.drain()
+            except Exception as e:
+                log.exception("couldn't send an order command")
+                more_a, more_e = self.rules.result({"req": a["req"], "ok": False, "error": f"watcher not running ({e})"})
+                for ev in more_e:
+                    await self._say(ev)
+
+    async def _say(self, e: dict) -> None:
+        log.info("trade: %s", e["text"])
+        if self.announce:
+            try:
+                await self.announce(e["title"], e["text"], level=e["level"], speak=e.get("say"))
+            except Exception:
+                log.exception("trade announcement failed")
+
     def _public(self) -> dict:
-        s = dict(self.tracker.state)
-        return s
+        return {**self.tracker.state, "rules": self.rules.public()}
 
     async def run(self) -> None:
         backoff = 5
@@ -270,7 +322,8 @@ class TradeWatcher:
             try:
                 self.proc = await asyncio.create_subprocess_exec(
                     "node", str(WATCHER), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-                    cwd=str(REPO), creationflags=0x08000000 if os.name == "nt" else 0)
+                    cwd=str(REPO), creationflags=0x08000000 if os.name == "nt" else 0,
+                    env={**os.environ, "JARVIS_TRADES_BROKERS": ",".join(self.rules.cfg["brokers"])})
                 assert self.proc.stdout
                 async for line in self.proc.stdout:
                     try:
@@ -300,7 +353,7 @@ class TradeWatcher:
 
 def describe(state: dict) -> dict:
     """For Jarvis's tool: the state in plain terms."""
-    out = {k: state.get(k) for k in ("status", "text", "broker", "daily_pnl", "trades_today", "working")}
+    out = {k: state.get(k) for k in ("status", "text", "broker", "daily_pnl", "trades_today", "working", "rules")}
     out["positions"] = [{**p, "since_et": datetime.fromtimestamp(p["since"], ET).strftime("%H:%M:%S") if p.get("since") else None}
                         for p in state.get("positions") or []]
     if state.get("status") != "ok":

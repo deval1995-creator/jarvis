@@ -22,7 +22,7 @@ from core import tavily
 from core import weather as wx
 
 SERVER_NAME = "tools"
-TOOL_NAMES = ["weather", "search", "read_page", "places", "mark_zones", "zones_today", "trade_status", "draw_level", "clear_my_drawings", "browser_open", "browser_read", "browser_follow",
+TOOL_NAMES = ["weather", "search", "read_page", "places", "mark_zones", "zones_today", "trade_status", "trade_rules", "draw_level", "clear_my_drawings", "browser_open", "browser_read", "browser_follow",
               "browser_back", "browser_scroll", "browser_reveal", "browser_screenshot", "browser_click", "browser_type"]
 # These act on a web page; they go through an approval card (connectors.NEEDS_APPROVAL)
 # rather than being allowed outright.
@@ -172,6 +172,19 @@ def build_tools_server(board=None, browser: br.Browser | None = None, conn=None,
             return _ok({"status": "off", "note": "The trade watcher isn't running; use the IBKR tools."})
         return _ok(tr.describe(trades.status()))
 
+    @tool("trade_rules", "Arm or disarm Deval's trade-management rules for the position he's in (PT1 +10% sells 1, "
+          "stop to break-even, PT2 +25% on 3 contracts, trailing runner, out by 15:30). Code then manages the trade; "
+          "you never place orders yourself. Use 'arm' ONLY when Deval's latest message clearly says to arm them "
+          "(e.g. 'yes' right after Jarvis asked 'Shall I arm the trade rules?', or 'arm the rules'); 'disarm' when he "
+          "says stop/disarm/turn off the rules; 'decline' when he says no to arming. Check trade_status first if "
+          "unsure what a bare 'yes' refers to: rules.state 'offered' means the question is open.",
+          {"type": "object", "properties": {"action": {"type": "string", "enum": ["arm", "disarm", "decline"]}},
+           "required": ["action"]})
+    async def trade_rules(args):
+        if trades is None:
+            return _ok({"ok": False, "error": "The trade watcher isn't running."})
+        return _ok(await trades.rules_action(args.get("action", "")))
+
     @tool("draw_level", "Draw a labelled horizontal line on Deval's TradingView chart (on the symbol it shows), e.g. a "
           "level Deval mentions. Labelled 'J· <price> <note>' so it's recognisably Jarvis's.",
           {"type": "object", "properties": {"price": {"type": "number"}, "note": {"type": "string"}}, "required": ["price"]})
@@ -282,5 +295,5 @@ def build_tools_server(board=None, browser: br.Browser | None = None, conn=None,
         return await _browse(browser.type(args["ref"], args["text"], bool(args.get("submit"))))
 
     return create_sdk_mcp_server(name=SERVER_NAME, version="1.0.0", tools=[
-        weather, search, read_page, places, mark_zones, zones_today, trade_status, draw_level, clear_my_drawings, browser_open, browser_read, browser_follow, browser_back,
+        weather, search, read_page, places, mark_zones, zones_today, trade_status, trade_rules, draw_level, clear_my_drawings, browser_open, browser_read, browser_follow, browser_back,
         browser_scroll, browser_reveal, browser_screenshot, browser_click, browser_type])

@@ -109,11 +109,14 @@ def create_app(
 
     board = WindowBoard(on_change=hub.broadcast)  # windows Jarvis opens on the page
     from core.routines import RoutineContext
+    from core.trade_rules import RuleBook, SettingsStore
     from core.trades import TradeWatcher
 
-    # Your broker positions, read through TradingView (never trades). Started with the Core.
+    # Your broker positions, read through TradingView. Started with the Core. Orders only come
+    # from the trade rules, once Deval arms them for a trade (core/trade_rules.py).
     trades = TradeWatcher(broadcast=hub.broadcast,
-                          announce=RoutineContext(board=board, broadcast=hub.broadcast, token=token, conn=conn).announce)
+                          announce=RoutineContext(board=board, broadcast=hub.broadcast, token=token, conn=conn).announce,
+                          rules=RuleBook(store=SettingsStore(conn)))
     app_scheduler: list = []
     backend_factory_given = backend_factory is not None
     app_browser: list = []  # Jarvis's own web browser, closed on shutdown
@@ -521,6 +524,12 @@ def create_app(
     @app.get("/api/position", dependencies=[Depends(require_token)])
     async def get_position() -> dict:
         return trades.status()
+
+    @app.post("/api/trade_rules/{action}", dependencies=[Depends(require_token)])
+    async def trade_rules_action(action: str) -> dict:
+        if action not in ("arm", "disarm", "decline"):
+            raise HTTPException(status_code=404, detail="arm, disarm or decline")
+        return await trades.rules_action(action)
 
     @app.get("/api/routines", dependencies=[Depends(require_token)])
     async def list_routines() -> list[dict]:

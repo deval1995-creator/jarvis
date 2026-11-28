@@ -4,7 +4,7 @@ The rules, for a LONG position of 1-3 contracts that he opened himself:
 
   2 contracts   PT1 +10%: sell 1 (a resting limit order placed when armed).
                 Then the runner's stop goes to entry + 0.03 and, once the price has reached
-                +25%, trails: 15% below the high (never below +10%), 10% below past +50%.
+                +25%, trails: 15% below the highest bid (never below +10%), 10% below past +50%.
   3 contracts   PT1 +10%: sell 1 -> stop to entry + 0.03 on 2, PT2 +25% placed.
                 PT2 +25%: sell 1 -> runner's stop to +10%, then the same trail.
   1 contract    only the time exit.
@@ -90,7 +90,7 @@ class Plan:
     broker: str
     armed_at: float
     k: int = 0              # profit targets filled so far
-    high: float = 0.0       # highest price since arming
+    high: float = 0.0       # highest BID since arming (what he could actually have sold at)
     pt_ids: dict = field(default_factory=dict)   # "1"/"2" -> order id Jarvis placed
     stop_id: str | None = None                   # the stop Jarvis manages (after PT1)
     stop_price: float | None = None              # where Jarvis last put it
@@ -169,7 +169,7 @@ class RuleBook:
             return [], [], f"It's past the {self._exit_time_text(now)} exit, so I won't arm the rules now."
         self.plan = Plan(symbol=pos["symbol"], name=pos.get("name") or pos["symbol"], n0=int(pos["qty"]),
                          avg=float(pos["avg"]), broker=snap.get("broker_id") or "", armed_at=now,
-                         high=float(pos.get("last") or pos["avg"]))
+                         high=float(sell_price(pos) or pos["avg"]))
         self.offer = None
         p, c = self.plan, self.cfg
         if p.n0 == 1:
@@ -225,8 +225,8 @@ class RuleBook:
             self.plan = None
             self._save()
             return self._send(acts, now), [ev]
-        if pos.get("last") is not None:
-            p.high = max(p.high, float(pos["last"]))
+        if sell_price(pos) is not None:
+            p.high = max(p.high, float(sell_price(pos)))
         if self.inflight or now < self.settle_until:
             return [], []
 
@@ -528,6 +528,12 @@ class RuleBook:
     def _save(self) -> None:
         if self.store:
             self.store.save(asdict(self.plan) if self.plan else None)
+
+
+def sell_price(pos: dict) -> float | None:
+    """The price the trail follows: the bid (what he could sell at right now), not the last print, which on
+    options can spike at the ask. Falls back to the last trade only when there's no bid."""
+    return pos.get("bid") if pos.get("bid") is not None else pos.get("last")
 
 
 class SettingsStore:

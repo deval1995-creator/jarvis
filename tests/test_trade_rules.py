@@ -13,6 +13,7 @@ class Broker:
 
     def __init__(self, qty, avg=4.00, stop=3.20, broker_id="paper"):
         self.qty, self.avg, self.last = qty, avg, avg
+        self.bid = avg
         self.broker_id = broker_id
         self.orders = {}  # id -> order
         self.fills = []
@@ -30,7 +31,7 @@ class Broker:
 
     def snap(self):
         pos = [{"id": "1", "symbol": SYM, "name": "QQQ 640 Put", "qty": self.qty, "side": "long", "avg": self.avg,
-                "pl": None, "last": self.last}] if self.qty else []
+                "pl": None, "last": self.last, "bid": self.bid}] if self.qty else []
         return {"status": "ok", "broker": "Paper Trading", "broker_id": self.broker_id, "positions": pos,
                 "working": [dict(o) for o in self.orders.values()], "fills": list(self.fills)}
 
@@ -56,8 +57,8 @@ class Broker:
         self.fills.append({"id": f"m{len(self.fills)}", "symbol": SYM, "side": "sell", "avg": self.last, "type": "market"})
 
     def move(self, price):
-        """Price moves: resting orders fill."""
-        self.last = price
+        """Price moves (bid and last together): resting orders fill."""
+        self.last = self.bid = price
         for oid, o in list(self.orders.items()):
             hit = (o["type"] == "limit" and price >= o["limit"]) or (o["type"] == "stop" and price <= o["stop"])
             if hit and self.qty:
@@ -316,3 +317,15 @@ def test_guard_leaves_a_right_sized_stop_alone():
     s["stop"] = 3.90                                 # he moves his stop: takeover, but the size is right
     ev, now = run(book, b, now)
     assert book.plan is None and stops(b)[0]["qty"] == 2 and stops(b)[0]["stop"] == 3.90
+
+
+def test_trail_follows_the_bid_not_a_spike_print():
+    book, b, ev, now = armed(2)
+    b.move(4.40)
+    ev, now = run(book, b, now)
+    b.move(5.40)                                     # bid 5.40: 15% below = 4.59
+    ev, now = run(book, b, now)
+    assert stops(b)[0]["stop"] == 4.59
+    b.last = 6.20                                    # one print at the ask, bid still 5.40
+    ev, now = run(book, b, now)
+    assert stops(b)[0]["stop"] == 4.59 and book.plan.high == 5.40

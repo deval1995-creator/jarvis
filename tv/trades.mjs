@@ -74,7 +74,8 @@ const SNAPSHOT = `(async () => {
     try { pl = num(svc.find(String(p.id))?.pl); } catch {}  // the P&L TradingView's own panel shows, live from the broker
     if (pl === null) pl = num(p.pl);
     return { id: String(p.id), symbol: p.symbol, name: p.symbolDisplayName || p.symbol, qty: Math.abs(p.qty),
-             side: p.side === -1 ? 'short' : 'long', avg: num(p.avgPrice), pl, last: live(p.symbol) ?? num(p.last) };
+             side: p.side === -1 ? 'short' : 'long', avg: num(p.avgPrice), pl, last: live(p.symbol) ?? num(p.last),
+             bid: J && J.quotes[p.symbol] ? num(J.quotes[p.symbol].bid) : null };  // what he could sell at now: the trail follows it
   });
   if (J) {  // stream quotes for open contracts only
     const want = new Set(open.map((p) => p.symbol));

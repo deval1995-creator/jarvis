@@ -154,3 +154,38 @@ def test_live_broker_is_not_asked_to_arm():
     asyncio.run(w.handle({**snap(), "broker_id": "IBKR"}))
     asyncio.run(w.handle({**snap([pos(qty=2)], [STOP]), "broker_id": "IBKR"}))
     assert "arm" not in said[-1]
+
+
+def test_crypto_reads_as_coins():
+    assert tr.spoken_contract("COINBASE:SOLUSD", 3) == "3 SOL"
+    assert tr.contract("BINANCE:ETHUSDT")["kind"] == "crypto"
+    assert tr.spoken_contract("NASDAQ:QQQ", 100) == "100 QQQ shares"
+
+
+def test_rules_sale_is_not_also_announced_as_a_trim():
+    from core.trade_rules import DEFAULTS, RuleBook
+
+    said = []
+
+    class Pipe:
+        def write(self, b): pass
+        async def drain(self): pass
+
+    class Proc:
+        stdin = Pipe()
+
+    async def announce(title, text, level="info", speak=None):
+        said.append(text)
+
+    w = tr.TradeWatcher(announce=announce, rules=RuleBook({**DEFAULTS, "time_exit": False}))
+    w.proc = Proc()
+    paper = lambda s: {**s, "broker_id": "paper"}  # noqa: E731
+    asyncio.run(w.handle(paper(snap())))
+    asyncio.run(w.handle(paper(snap([pos(qty=2)], [STOP]))))
+    asyncio.run(w.rules_action("arm"))
+    w.rules.plan.pt_ids["1"] = "pt1"
+    w.rules.inflight.clear()
+    w.rules.settle_until = 0
+    said.clear()
+    asyncio.run(w.handle(paper(snap([pos(qty=1)], [STOP], [{**fill(9, "sell", 1, "limit", 4.54), "id": "pt1"}]))))
+    assert not any(t.startswith("Trimmed") for t in said) and any("PT1 filled" in t for t in said)

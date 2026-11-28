@@ -167,7 +167,7 @@ def test_bracket_that_cant_be_resized_is_replaced():
     ev, now = run(book, b, now)
     [s] = stops(b)
     assert (s["qty"], s["stop"], s["parent"]) == (1, 4.03, None)
-    assert any("Stop set to 4.03 on 1 contract" in t for t in texts(ev))
+    assert any("Stop moved to 4.03 on 1 QQQ 640 put" in t for t in texts(ev))
 
 
 def test_moving_the_stop_yourself_hands_over():
@@ -254,3 +254,23 @@ def test_no_arming_after_the_time_exit():
     book.step(b.snap(), late)
     acts, events, err = book.arm(late)
     assert acts == [] and "15:30" in err
+
+
+def test_bracket_stop_becomes_standalone_when_armed():
+    book, b, ev, now = armed(3)
+    [s] = stops(b)
+    assert (s["qty"], s["stop"], s["parent"]) == (3, 3.20, None)   # same stop, no longer tied to the entry
+    assert any("standalone" in t for t in texts(ev))
+    b.move(4.40)                                                     # PT1: now a plain move, no cancel/replace
+    ev, now = run(book, b, now)
+    [s2] = stops(b)
+    assert s2["id"] == s["id"] and (s2["qty"], s2["stop"]) == (2, 4.03)
+
+
+def test_stop_moved_by_him_before_pt1_is_followed_not_a_takeover():
+    book, b, ev, now = armed(2)
+    stops(b)[0]["stop"] = 3.50                                       # he tightens it before PT1
+    ev, now = run(book, b, now)
+    b.move(4.40)
+    ev, now = run(book, b, now)
+    assert book.plan is not None and stops(b)[0]["stop"] == 4.03

@@ -31,6 +31,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from core.scheduler import ET, market_close
+from core.trades import spoken_contract
 
 DEFAULTS = {
     "pt1": 0.10,            # first profit: +10%
@@ -94,6 +95,8 @@ class Plan:
     stop_id: str | None = None                   # the stop Jarvis manages (after PT1)
     stop_price: float | None = None              # where Jarvis last put it
     closing: bool = False   # time exit sent
+    swapped: bool = False   # his bracket stop was cancelled to be replaced by a standalone one
+    swap_done: bool = False # ... and the standalone stop is in place
 
     @property
     def qty_now(self) -> int:
@@ -285,8 +288,13 @@ class RuleBook:
             first = p.stop_price is None
             p.stop_id = res.get("id") or a.get("id")
             p.stop_price = a["price"]
+            if a.get("swap"):
+                p.swap_done = True
+                self._save()
+                return [], [self._ev("Stop ready", f"Your stop at {p2(a['price'])} is now a standalone order, so I can "
+                                                   "move it later without a gap.", speak=False)]
             self._save()
-            what = spoken_qty(a["qty"])
+            what = spoken_contract(p.symbol, a["qty"], p.name)
             if a.get("trail"):
                 return [], [self._ev("Stop raised", f"Stop up to {p2(a['price'])}.", level="info")]
             return [], [self._ev("Stop moved", f"Stop {'set' if first else 'moved'} to {p2(a['price'])} on {what}.")]
@@ -327,6 +335,27 @@ class RuleBook:
                                           what=f"move the stop to {p2(want)}",
                                           fallback={"cmd": "place", "symbol": p.symbol, "kind": "stop", "qty": q,
                                                     "price": want, "what": f"place a stop at {p2(want)}"}))
+        else:
+            # before PT1 the stop is his: follow where he puts it. If it's a bracket attached to the entry order,
+            # swap it for a standalone stop at the same price now (far from the price), because a bracket can't
+            # be resized later and replacing it then would leave a moment without a stop.
+            stops = [o for o in mine if o["type"] in ("stop", "stop_limit")]
+            if len(stops) == 1:
+                s = stops[0]
+                if (p.stop_id, p.stop_price) != (s["id"], s.get("stop")):
+                    p.stop_id, p.stop_price = s["id"], s.get("stop")
+                    self._save()
+                if s.get("parent") and p.n0 >= 2 and not p.swapped and s.get("stop"):
+                    p.swapped = True
+                    self._save()
+                    acts.append(self._act("cancel", id=s["id"], symbol=p.symbol, what="swap your bracket stop",
+                                          then={"cmd": "place", "symbol": p.symbol, "kind": "stop", "qty": q,
+                                                "price": s["stop"], "swap": True,
+                                                "what": f"put your stop back at {p2(s['stop'])}"}))
+            elif not stops and p.swapped and not p.swap_done and p.stop_price:
+                # I cancelled his bracket but the new stop isn't there: put it back
+                acts.append(self._act("place", symbol=p.symbol, kind="stop", qty=q, price=p.stop_price, swap=True,
+                                      what=f"put your stop back at {p2(p.stop_price)}"))
         # then the profit order for the next step (the stop always goes first)
         n = p.k + 1
         if (p.n0 == 2 and n == 1) or (p.n0 == 3 and n in (1, 2)):
@@ -458,10 +487,6 @@ class RuleBook:
     def _save(self) -> None:
         if self.store:
             self.store.save(asdict(self.plan) if self.plan else None)
-
-
-def spoken_qty(n: int) -> str:
-    return f"{n} contract{'' if n == 1 else 's'}"
 
 
 class SettingsStore:

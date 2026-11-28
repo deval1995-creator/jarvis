@@ -33,6 +33,9 @@ STALE_SECONDS = 45  # no reading for this long = the watcher is stuck
 FUTURES_MULT = {"NQ": 20, "MNQ": 2, "ES": 50, "MES": 5, "YM": 5, "MYM": 0.5, "RTY": 50, "M2K": 5, "CL": 1000, "MCL": 100,
                 "GC": 100, "MGC": 10}
 
+CRYPTO_EXCHANGES = {"COINBASE", "BINANCE", "BINANCEUS", "BITSTAMP", "KRAKEN", "BYBIT", "OKX", "BITFINEX", "GEMINI",
+                    "CRYPTO", "CRYPTOCAP", "BITGET", "KUCOIN", "MEXC"}
+
 STATUS_TEXT = {
     "no_tv": "Can't see positions: TradingView is closed",
     "loading": "Can't see positions: TradingView is still loading",
@@ -55,6 +58,10 @@ def contract(symbol: str, name: str | None = None) -> dict:
         strike = float(m.group(4))
         return {"kind": "option", "root": m.group(1), "right": "put" if m.group(3) == "P" else "call",
                 "strike": f"{strike:g}", "expiry": m.group(2), "mult": 100}
+    exch = (symbol or "").split(":")[0].upper() if ":" in (symbol or "") else ""
+    cm = re.match(r"^([A-Z0-9]{2,10}?)(USDT|USDC|USD|EUR|BTC)$", tick)
+    if cm and (exch in CRYPTO_EXCHANGES or cm.group(2) in ("USDT", "USDC")):
+        return {"kind": "crypto", "root": cm.group(1), "mult": 1}
     fut = re.match(r"^(M?[A-Z]{1,3}?)(?:1!|[FGHJKMNQUVXZ]\d{2,4})$", tick)
     if fut and fut.group(1) in FUTURES_MULT:
         return {"kind": "future", "root": fut.group(1), "mult": FUTURES_MULT[fut.group(1)]}
@@ -68,6 +75,8 @@ def spoken_contract(symbol: str, qty: float, name: str | None = None) -> str:
         return f"{n} {c['root']} {c['strike']} {c['right']}{'' if n == 1 else 's'}"
     if c["kind"] == "future":
         return f"{n} {c['root']} contract{'' if n == 1 else 's'}"
+    if c["kind"] == "crypto":
+        return f"{n} {c['root']}"
     return f"{n} {c['root']} share{'' if n == 1 else 's'}"
 
 
@@ -206,7 +215,8 @@ class Tracker:
         verb = "Added to" if p["qty"] > old["qty"] else "Trimmed"
         what = spoken_contract(p["symbol"], p["qty"], p.get("name"))
         text = f"{verb} the position: now {p['side']} {what}, average {price(p.get('avg'))}"
-        return {"kind": "resize", "title": "Position changed", "text": text + ".", "say": text + ", sir.", "level": "info"}
+        return {"kind": "resize", "title": "Position changed", "text": text + ".", "say": text + ", sir.", "level": "info",
+                "symbol": p["symbol"], "down": p["qty"] < old["qty"]}
 
     @staticmethod
     def _exit(old: dict, fills: list[dict]) -> dict:
@@ -258,8 +268,11 @@ class TradeWatcher:
             actions, rule_events = self.rules.result(snap)
             events = []
         else:
+            managed = self.rules.plan.symbol if self.rules.plan else None
             actions, rule_events = self.rules.step(snap)
             events = self.tracker.update(snap)
+            # the rules announce their own sales ("PT1 filled ..."); don't also say "Trimmed the position"
+            events = [e for e in events if not (e["kind"] == "resize" and e.get("symbol") == managed and e.get("down"))]
             offer = self.rules.offer
             for e in events:
                 if e["kind"] == "entry" and offer and offer.get("allowed"):

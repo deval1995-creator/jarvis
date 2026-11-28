@@ -21,6 +21,7 @@ class Broker:
         if stop is not None:
             self._new("stop", qty, stop, parent="entry")
         self.reject_modify = False
+        self.reject_stops = False
 
     def _new(self, kind, qty, price, parent=None):
         self.n += 1
@@ -40,6 +41,8 @@ class Broker:
         r = {"type": "result", "req": a["req"], "ok": True}
         if a["cmd"] == "place":
             assert a["qty"] <= self.qty, "never sell more than is held"
+            if self.reject_stops and a["kind"] == "stop":
+                return {**r, "ok": False, "error": "order rejected by IBKR"}
             r["id"] = self._new(a["kind"], a["qty"], a["price"])
         elif a["cmd"] == "modify":
             assert self.orders[a["id"]]["type"] == "stop"
@@ -329,3 +332,29 @@ def test_trail_follows_the_bid_not_a_spike_print():
     b.last = 6.20                                    # one print at the ask, bid still 5.40
     ev, now = run(book, b, now)
     assert stops(b)[0]["stop"] == 4.59 and book.plan.high == 5.40
+
+
+def test_rejected_swap_keeps_his_original_stop():
+    b = Broker(3)
+    b.reject_stops = True                            # IBKR refuses Jarvis's standalone stop
+    book = tr.RuleBook(dict(tr.DEFAULTS))
+    book.step(b.snap(), T0)
+    acts, events, _ = book.arm(T0)
+    ev, now = run(book, b, T0, acts, events)
+    [s] = stops(b)
+    assert s["parent"] == "entry" and s["stop"] == 3.20  # never left without a stop
+    assert any("Your original stop is still working" in t for t in texts(ev))
+
+
+def test_rejected_replacement_at_pt1_keeps_the_old_stop():
+    book, b, ev, now = armed(2)
+    b.reject_modify = True
+    b.reject_stops = True
+    b.move(4.40)
+    ev, now = run(book, b, now)
+    assert len(stops(b)) == 1 and stops(b)[0]["stop"] == 3.20  # still protected (oversized, but there)
+    assert any("Your original stop is still working" in t for t in texts(ev))
+    b.reject_stops = False                           # 30 s later it tries again, and it works
+    ev, now = run(book, b, now + 30)
+    [s] = stops(b)
+    assert (s["qty"], s["stop"]) == (1, 4.03)

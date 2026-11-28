@@ -50,6 +50,7 @@ DEFAULTS = {
     "brokers": ["paper"],   # broker ids (substring, any case) the rules may send orders through
     "settle_s": 3.0,        # after an order action, give TradingView this long to show it
     "timeout_s": 8.0,       # an order action with no answer for this long has failed
+    "retry_s": 30.0,        # after a rejected order, wait this long before trying again
 }
 
 SIZES = (1, 2, 3)
@@ -129,6 +130,7 @@ class RuleBook:
         self.last_warn = 0.0
         self._req = itertools.count(1)
         self.restored: dict | None = store.load() if store else None
+        self.backoff_until = 0.0  # after a rejected order: don't hammer the broker
         self.guard: str | None = None  # after he takes over: keep his stops no bigger than what he holds
 
     # ---------- public state ----------
@@ -277,20 +279,24 @@ class RuleBook:
         ok = bool(res.get("ok"))
         if not ok:
             err = res.get("error") or "rejected"
-            if a["cmd"] == "modify" and (p or a.get("guard")) and a.get("fallback"):  # e.g. IBKR won't resize a bracket child: replace it
-                return self._send([self._act("cancel", id=a["id"], symbol=a["symbol"], guard=a.get("guard"),
-                                             then=dict(a["fallback"]))], now), []
-            return [], [self._ev("Order failed", f"Sir, I couldn't {a['what']}: {err}.", level="warn")]
-        if a["cmd"] == "cancel" and a.get("then") and (p or a.get("guard")):
-            return self._send([self._act(**a["then"])], now), []
+            if a["cmd"] == "modify" and (p or a.get("guard")) and a.get("fallback"):
+                # the broker won't change this stop (e.g. a bracket): place the new one FIRST, then cancel the old,
+                # so a rejection anywhere leaves him with a stop, never without one
+                return self._send([self._act(**{**a["fallback"], "replaces": a["id"]})], now), []
+            self.backoff_until = now + self.cfg["retry_s"]
+            keep = " Your original stop is still working." if a.get("replaces") else ""
+            return [], [self._ev("Order failed", f"Sir, I couldn't {a['what']}: {err}.{keep}", level="warn")]
+        # a new stop is in: now cancel the one it replaces
+        follow = self._send([self._act("cancel", id=a["replaces"], symbol=a["symbol"], guard=a.get("guard"),
+                                       what="cancel the old stop (two stops are working)")], now) if a.get("replaces") else []
         if a.get("done"):  # the stop guard's own message, once it worked
-            return [], [self._ev("Stop fixed", a["done"], level="warn")]
+            return follow, [self._ev("Stop fixed", a["done"], level="warn")]
         if not p:
-            return [], []
+            return follow, []
         if a["cmd"] == "place" and a.get("pt"):
             p.pt_ids[str(a["pt"])] = res.get("id")
             self._save()
-            return [], [self._ev(f"PT{a['pt']} placed", f"PT{a['pt']} waiting at {p2(a['price'])}.",
+            return follow, [self._ev(f"PT{a['pt']} placed", f"PT{a['pt']} waiting at {p2(a['price'])}.",
                                  speak=a["pt"] != 1)]  # PT1's price was just said when arming
         if a["cmd"] in ("place", "modify") and a.get("kind", "stop") == "stop":
             first = p.stop_price is None
@@ -299,19 +305,19 @@ class RuleBook:
             if a.get("swap"):
                 p.swap_done = True
                 self._save()
-                return [], [self._ev("Stop ready", f"Stop {p2(a['price'])} now standalone, ready to move.", speak=False)]
+                return follow, [self._ev("Stop ready", f"Stop {p2(a['price'])} now standalone, ready to move.", speak=False)]
             self._save()
             if a.get("trail"):
-                return [], [self._ev("Trailing", f"Trailing. Stop up to {p2(a['price'])}.")]
+                return follow, [self._ev("Trailing", f"Trailing. Stop up to {p2(a['price'])}.")]
             if p.k == 1:
-                return [], [self._ev("Stop moved", f"Stop to break-even: {p2(a['price'])}.")]
+                return follow, [self._ev("Stop moved", f"Stop to break-even: {p2(a['price'])}.")]
             if p.k >= 2:
-                return [], [self._ev("Stop moved", f"Runner locked at {p2(a['price'])}.")]
+                return follow, [self._ev("Stop moved", f"Runner locked at {p2(a['price'])}.")]
             what = spoken_contract(p.symbol, a["qty"], p.name)
-            return [], [self._ev("Stop moved", f"Stop {'set' if first else 'moved'} to {p2(a['price'])} on {what}.")]
+            return follow, [self._ev("Stop moved", f"Stop {'set' if first else 'moved'} to {p2(a['price'])} on {what}.")]
         if a["cmd"] == "close":
-            return [], [self._ev("Time exit", f"{self._exit_time_text(now)}, sir. Closed you out at market.")]
-        return [], []
+            return follow, [self._ev("Time exit", f"{self._exit_time_text(now)}, sir. Closed you out at market.")]
+        return follow, []
 
     # ---------- internals ----------
 
@@ -325,6 +331,8 @@ class RuleBook:
             self._save()
             return self._send([self._act("close", symbol=p.symbol, qty=q, what="close the position")]
                               + self._cancel_my_pts(snap), now), []
+        if now < self.backoff_until:  # an order was just rejected: try again in a little while
+            return [], []
         # the stop, once a profit has been taken
         if p.k >= 1:
             want, base = self._stop_target(p)
@@ -349,7 +357,8 @@ class RuleBook:
         else:
             # before PT1 the stop is his: follow where he puts it. If it's a bracket attached to the entry order,
             # swap it for a standalone stop at the same price now (far from the price), because a bracket can't
-            # be resized later and replacing it then would leave a moment without a stop.
+            # be resized later. The new stop goes in first and only then is the bracket cancelled: if the
+            # broker rejects anything, his original stop stays.
             stops = [o for o in mine if o["type"] in ("stop", "stop_limit")]
             if len(stops) == 1:
                 s = stops[0]
@@ -359,10 +368,8 @@ class RuleBook:
                 if s.get("parent") and p.n0 >= 2 and not p.swapped and s.get("stop"):
                     p.swapped = True
                     self._save()
-                    acts.append(self._act("cancel", id=s["id"], symbol=p.symbol, what="swap your bracket stop",
-                                          then={"cmd": "place", "symbol": p.symbol, "kind": "stop", "qty": q,
-                                                "price": s["stop"], "swap": True,
-                                                "what": f"put your stop back at {p2(s['stop'])}"}))
+                    acts.append(self._act("place", symbol=p.symbol, kind="stop", qty=q, price=s["stop"], swap=True,
+                                          replaces=s["id"], what=f"set a standalone stop at {p2(s['stop'])}"))
             elif not stops and p.swapped and not p.swap_done and p.stop_price:
                 # I cancelled his bracket but the new stop isn't there: put it back
                 acts.append(self._act("place", symbol=p.symbol, kind="stop", qty=q, price=p.stop_price, swap=True,

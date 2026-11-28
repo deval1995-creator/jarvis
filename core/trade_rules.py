@@ -3,10 +3,10 @@
 The rules, for a LONG position of 1-3 contracts that he opened himself:
 
   2 contracts   PT1 +10%: sell 1 (a resting limit order placed when armed).
-                Then the runner's stop goes to entry + 0.03 and, once the price has reached
-                +25%, trails: 15% below the highest bid (never below +10%), 10% below past +50%.
-  3 contracts   PT1 +10%: sell 1 -> stop to entry + 0.03 on 2, PT2 +25% placed.
-                PT2 +25%: sell 1 -> runner's stop to +10%, then the same trail.
+                Then the runner's stop goes to entry + 0.03 and, once the bid has reached
+                +20%, trails: 10% below the highest bid (never below +10%).
+  3 contracts   PT1 +10%: sell 1 -> stop to entry + 0.03 on 2, PT2 +20% placed.
+                PT2 +20%: sell 1 -> runner's stop to +10%, then the same trail.
   1 contract    only the time exit.
   Always        anything still open 30 min before the close (15:30 ET) is closed at market.
 
@@ -35,13 +35,13 @@ from core.trades import spoken_contract
 
 DEFAULTS = {
     "pt1": 0.10,            # first profit: +10%
-    "pt2": 0.25,            # second profit (3 contracts): +25%
+    "pt2": 0.20,            # second profit (3 contracts): +20%
     "be_offset": 0.03,      # break-even stop = entry + this (covers slippage)
     "lock": 0.10,           # runner's floor once trailing / after PT2: +10%
-    "trail_start": 0.25,    # the trail starts once the high reaches +25%
-    "trail_wide": 0.15,     # 15% below the high ...
-    "tight_after": 0.50,    # ... until the high passes +50%,
-    "trail_tight": 0.10,    # then 10% below the high
+    "trail_start": 0.20,    # the trail starts once the highest bid reaches +20%
+    "trail_wide": 0.10,     # 10% below the highest bid (stop = high x 0.90) ...
+    "tight_after": 0.50,    # ... (a tighter step past +50% is possible;
+    "trail_tight": 0.10,    #      set equal: one 10% trail throughout)
     "min_step": 0.05,       # don't send a trail move smaller than this
     "tick": 0.01,           # price increment (QQQ options: 1 cent)
     "exit_before_close_min": 30,

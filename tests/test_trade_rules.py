@@ -121,13 +121,13 @@ def test_three_contracts_full_run():
     assert b.qty == 2
     [s] = stops(b)
     assert (s["qty"], s["stop"]) == (2, 4.03)       # break-even + 0.03 on the rest
-    assert "PT1 sold, sir. 1 at 4.40." in texts(ev) and "PT2 waiting at 5.00." in texts(ev)
+    assert "PT1 sold, sir. 1 at 4.40." in texts(ev) and "PT2 waiting at 4.80." in texts(ev)
     assert "Stop to break-even: 4.03." in texts(ev)
-    b.move(5.00)                                    # PT2 fills
+    b.move(4.80)                                    # PT2 fills (+20%)
     ev, now = run(book, b, now)
     [s] = stops(b)
     assert b.qty == 1 and (s["qty"], s["stop"]) == (1, 4.40)  # runner locked at +10%
-    for px in (5.30, 5.60, 6.20):                   # runs: 15% trail, then 10% past +50%
+    for px in (5.30, 5.60, 6.20):                   # runs: stop 10% below the highest bid
         b.move(px)
         ev, now = run(book, b, now)
     assert stops(b)[0]["stop"] == 5.58
@@ -141,21 +141,21 @@ def test_two_contracts_runner_trails_with_a_floor():
     b.move(4.40)
     ev, now = run(book, b, now)
     assert stops(b)[0]["stop"] == 4.03 and stops(b)[0]["qty"] == 1
-    b.move(4.90)                                    # below +25%: no trail yet
+    b.move(4.70)                                    # below +20%: no trail yet
     ev, now = run(book, b, now)
     assert stops(b)[0]["stop"] == 4.03
-    b.move(5.00)                                    # +25%: 15% below = 4.25, floor +10% = 4.40
+    b.move(4.80)                                    # +20%: 10% below = 4.32, floor +10% = 4.40
     ev, now = run(book, b, now)
     assert stops(b)[0]["stop"] == 4.40
-    b.move(5.02)                                    # a move smaller than 0.05 isn't sent
+    b.move(4.93)                                    # 4.44: a move smaller than 0.05 isn't sent
     ev, now = run(book, b, now)
     assert stops(b)[0]["stop"] == 4.40
     b.move(5.60)
     ev, now = run(book, b, now)
-    assert stops(b)[0]["stop"] == 4.76
+    assert stops(b)[0]["stop"] == 5.04
     b.move(5.40)                                    # never moves down
     ev, now = run(book, b, now)
-    assert stops(b)[0]["stop"] == 4.76
+    assert stops(b)[0]["stop"] == 5.04
 
 
 def test_stop_out_before_pt1_cancels_my_profit_order():
@@ -326,12 +326,12 @@ def test_trail_follows_the_bid_not_a_spike_print():
     book, b, ev, now = armed(2)
     b.move(4.40)
     ev, now = run(book, b, now)
-    b.move(5.40)                                     # bid 5.40: 15% below = 4.59
+    b.move(5.40)                                     # bid 5.40: 10% below = 4.86
     ev, now = run(book, b, now)
-    assert stops(b)[0]["stop"] == 4.59
+    assert stops(b)[0]["stop"] == 4.86
     b.last = 6.20                                    # one print at the ask, bid still 5.40
     ev, now = run(book, b, now)
-    assert stops(b)[0]["stop"] == 4.59 and book.plan.high == 5.40
+    assert stops(b)[0]["stop"] == 4.86 and book.plan.high == 5.40
 
 
 def test_rejected_swap_keeps_his_original_stop():
